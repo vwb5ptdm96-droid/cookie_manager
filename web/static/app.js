@@ -4,6 +4,13 @@ const state = {
     currentView: "tasks",
 };
 
+const viewTitles = {
+    tasks: "任务管理",
+    cookies: "Cookie 数据",
+    runs: "运行记录",
+    settings: "系统设置",
+};
+
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 
@@ -25,10 +32,48 @@ function bindEvents() {
     $("#refreshRunsButton").addEventListener("click", loadRuns);
     $("#refreshCookiesButton").addEventListener("click", loadCookies);
     $("#searchInput").addEventListener("input", renderTasks);
-    $("#statusFilter").addEventListener("change", renderTasks);
+    bindStatusFilter();
     $("#cancelDeleteButton").addEventListener("click", closeDeleteDialog);
     $("#confirmDeleteButton").addEventListener("click", confirmDelete);
     $$(".nav-item").forEach((button) => button.addEventListener("click", switchView));
+}
+
+function bindStatusFilter() {
+    const menu = $("#statusFilterMenu");
+    const trigger = menu.querySelector(".select-trigger");
+    const options = [...menu.querySelectorAll("[role='option']")];
+
+    trigger.addEventListener("click", () => {
+        const isOpen = menu.classList.toggle("open");
+        trigger.setAttribute("aria-expanded", String(isOpen));
+    });
+
+    options.forEach((option) => {
+        option.addEventListener("click", () => {
+            $("#statusFilter").value = option.dataset.value;
+            $("#statusFilterLabel").textContent = option.textContent;
+            options.forEach((item) => {
+                item.setAttribute("aria-selected", String(item === option));
+            });
+            closeStatusFilter();
+            renderTasks();
+        });
+    });
+
+    document.addEventListener("click", (event) => {
+        if (!menu.contains(event.target)) closeStatusFilter();
+    });
+
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") closeStatusFilter();
+    });
+}
+
+function closeStatusFilter() {
+    const menu = $("#statusFilterMenu");
+    if (!menu) return;
+    menu.classList.remove("open");
+    menu.querySelector(".select-trigger").setAttribute("aria-expanded", "false");
 }
 
 async function api(url, options = {}) {
@@ -153,11 +198,16 @@ async function loadRuns() {
 
 function switchView(event) {
     const view = event.currentTarget.dataset.view;
+    if (view === state.currentView) return;
     state.currentView = view;
     $$(".nav-item").forEach((item) => item.classList.toggle("active", item.dataset.view === view));
     ["tasks", "runs", "cookies", "settings"].forEach((name) => {
-        $(`#${name}View`).classList.toggle("hidden", name !== view);
+        const panel = $(`#${name}View`);
+        const isActive = name === view;
+        panel.classList.toggle("hidden", !isActive);
+        panel.classList.toggle("view-active", isActive);
     });
+    $("h1").textContent = viewTitles[view] || "任务管理";
     if (view === "runs") loadRuns();
     if (view === "cookies") loadCookies();
 }

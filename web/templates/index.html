@@ -58,13 +58,20 @@
                         <span>⌕</span>
                         <input id="searchInput" type="search" placeholder="搜索任务 / 站点 / 账号">
                     </div>
-                    <select id="statusFilter" aria-label="状态筛选">
-                        <option value="all">全部状态</option>
-                        <option value="success">运行正常</option>
-                        <option value="failed">执行失败</option>
-                        <option value="running">执行中</option>
-                        <option value="disabled">已停用</option>
-                    </select>
+                    <div class="select-menu" id="statusFilterMenu">
+                        <input type="hidden" id="statusFilter" value="all">
+                        <button class="select-trigger" type="button" aria-haspopup="listbox" aria-expanded="false">
+                            <span id="statusFilterLabel">全部状态</span>
+                            <span class="select-chevron">⌄</span>
+                        </button>
+                        <div class="select-options" role="listbox" aria-label="状态筛选">
+                            <button type="button" role="option" data-value="all" aria-selected="true">全部状态</button>
+                            <button type="button" role="option" data-value="success">运行正常</button>
+                            <button type="button" role="option" data-value="failed">执行失败</button>
+                            <button type="button" role="option" data-value="running">执行中</button>
+                            <button type="button" role="option" data-value="disabled">已停用</button>
+                        </div>
+                    </div>
                     <button class="button secondary" id="refreshListButton">刷新列表</button>
                 </div>
 
