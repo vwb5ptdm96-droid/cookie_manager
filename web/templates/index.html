@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Cookie 管理中心</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body>
+    <div class="app-shell">
+        <aside class="sidebar">
+            <div class="brand">
+                <span class="brand-mark">C</span>
+                <div>
+                    <strong>Cookie 管理中心</strong>
+                    <small>Internal Console</small>
+                </div>
+            </div>
+            <nav class="nav-list">
+                <button class="nav-item active" data-view="tasks">任务管理</button>
+                <button class="nav-item" data-view="cookies">Cookie 数据</button>
+                <button class="nav-item" data-view="runs">运行记录</button>
+                <button class="nav-item" data-view="settings">系统设置</button>
+            </nav>
+            <div class="sidebar-footer">
+                <span class="status-dot"></span>
+                <div>
+                    <strong>调度器运行中</strong>
+                    <small id="lastSyncText">等待同步</small>
+                </div>
+            </div>
+        </aside>
+
+        <main class="main-content">
+            <header class="page-header">
+                <div>
+                    <p class="eyebrow">COOKIE OPERATIONS</p>
+                    <h1>任务管理</h1>
+                    <p>统一登记站点账号，定时探测 Cookie 状态并按需运行刷新脚本。</p>
+                </div>
+                <div class="header-actions">
+                    <span class="scheduler-badge"><span></span>调度器运行中</span>
+                    <button class="button primary" id="addTaskButton">+ 新增任务</button>
+                </div>
+            </header>
+
+            <section class="metrics" aria-label="任务概览">
+                <article><span>任务总数</span><strong id="statTotal">0</strong></article>
+                <article><span>运行正常</span><strong class="success" id="statNormal">0</strong></article>
+                <article><span>执行失败</span><strong class="warning" id="statFailed">0</strong></article>
+                <article><span>已停用</span><strong class="muted" id="statDisabled">0</strong></article>
+            </section>
+
+            <section class="content-panel" id="tasksView">
+                <div class="toolbar">
+                    <div class="search-box">
+                        <span>⌕</span>
+                        <input id="searchInput" type="search" placeholder="搜索任务 / 站点 / 账号">
+                    </div>
+                    <select id="statusFilter" aria-label="状态筛选">
+                        <option value="all">全部状态</option>
+                        <option value="success">运行正常</option>
+                        <option value="failed">执行失败</option>
+                        <option value="running">执行中</option>
+                        <option value="disabled">已停用</option>
+                    </select>
+                    <button class="button secondary" id="refreshListButton">刷新列表</button>
+                </div>
+
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>任务名称</th>
+                                <th>站点标识</th>
+                                <th>账号</th>
+                                <th>探测地址</th>
+                                <th>状态</th>
+                                <th>最近执行</th>
+                                <th>刷新脚本</th>
+                                <th class="actions-column">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="taskTableBody">
+                            <tr><td colspan="8" class="empty-state">正在加载任务...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section class="content-panel hidden" id="runsView">
+                <div class="section-heading">
+                    <div>
+                        <h2>运行记录</h2>
+                        <p>显示最近 100 次手动和自动执行结果。</p>
+                    </div>
+                    <button class="button secondary" id="refreshRunsButton">刷新记录</button>
+                </div>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>任务</th>
+                                <th>操作</th>
+                                <th>状态</th>
+                                <th>HTTP</th>
+                                <th>开始时间</th>
+                                <th>结束时间</th>
+                                <th>信息</th>
+                            </tr>
+                        </thead>
+                        <tbody id="runTableBody"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section class="content-panel hidden" id="cookiesView">
+                <div class="section-heading">
+                    <div>
+                        <h2>Cookie 数据</h2>
+                        <p>按站点和账号去重保存，完整 Cookie 不在列表中输出。</p>
+                    </div>
+                    <button class="button secondary" id="refreshCookiesButton">刷新数据</button>
+                </div>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>站点标识</th>
+                                <th>账号</th>
+                                <th>Cookie 长度</th>
+                                <th>最近状态</th>
+                                <th>最近探测</th>
+                                <th>最近刷新</th>
+                                <th>数据更新时间</th>
+                            </tr>
+                        </thead>
+                        <tbody id="cookieTableBody"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section class="content-panel hidden placeholder-view" id="settingsView">
+                <h2>系统设置</h2>
+                <p>探测周期、Web 地址和 MySQL 连接配置通过 `.env` 管理。</p>
+            </section>
+        </main>
+    </div>
+
+    <div class="drawer-backdrop hidden" id="drawerBackdrop"></div>
+    <aside class="drawer" id="taskDrawer" aria-hidden="true">
+        <form id="taskForm">
+            <div class="drawer-header">
+                <div>
+                    <p class="eyebrow">TASK CONFIGURATION</p>
+                    <h2 id="drawerTitle">新增任务</h2>
+                </div>
+                <button type="button" class="icon-button" id="closeDrawerButton" aria-label="关闭">×</button>
+            </div>
+            <div class="drawer-body">
+                <input type="hidden" id="taskId">
+                <label>任务名称<input id="name" required placeholder="例如：拼多多官旗"></label>
+                <div class="form-grid">
+                    <label>站点标识<input id="site" required placeholder="例如：pdd-home"></label>
+                    <label>账号标识<input id="account" required placeholder="用于 Cookie 去重"></label>
+                </div>
+                <div class="form-grid">
+                    <label>登录账号<input id="username" autocomplete="username" placeholder="网站登录账号"></label>
+                    <label>登录密码
+                        <span class="password-field">
+                            <input id="password" type="password" autocomplete="current-password" placeholder="网站登录密码">
+                            <button type="button" id="togglePassword">显示</button>
+                        </span>
+                    </label>
+                </div>
+                <label>探测网址<input id="probeUrl" type="url" required placeholder="https://..."></label>
+                <div class="form-grid">
+                    <label>正常状态码
+                        <input id="okStatuses" value="200" required>
+                        <small>多个状态码用英文逗号分隔</small>
+                    </label>
+                    <label>请求超时（秒）<input id="timeoutSeconds" type="number" min="1" max="300" value="15"></label>
+                </div>
+                <label>刷新脚本
+                    <input id="refreshScript" list="scriptOptions" required placeholder="refresher.sites.site_pdd">
+                    <datalist id="scriptOptions"></datalist>
+                    <small>脚本由你在 refresher/sites 中维护</small>
+                </label>
+                <label class="switch-row">
+                    <span><strong>启用定时探测</strong><small>关闭后调度器不会自动执行</small></span>
+                    <input id="enabled" type="checkbox" checked>
+                </label>
+
+                <details>
+                    <summary>高级配置</summary>
+                    <div class="advanced-fields">
+                        <label>登录网址<input id="loginUrl" type="url" placeholder="https://.../login"></label>
+                        <label>浏览器路径<input id="browserPath" placeholder="C:\Program Files...\msedge.exe"></label>
+                        <label>浏览器用户目录<input id="userDataDir" placeholder="D:\cookie_profiles\...\User Data"></label>
+                        <div class="form-grid">
+                            <label>Profile<input id="profileDir" value="Default"></label>
+                            <label>CDP 端口<input id="cdpPort" type="number" min="1" max="65535" value="9222"></label>
+                        </div>
+                        <label>请求头 JSON<textarea id="headers" rows="4" placeholder='{"User-Agent": "..."}'></textarea></label>
+                    </div>
+                </details>
+            </div>
+            <div class="drawer-footer">
+                <button type="button" class="button secondary" id="cancelButton">取消</button>
+                <button type="submit" class="button primary" id="saveButton">保存任务</button>
+            </div>
+        </form>
+    </aside>
+
+    <div class="modal-backdrop hidden" id="confirmBackdrop">
+        <div class="confirm-dialog">
+            <h3>删除任务</h3>
+            <p>删除后任务配置和运行记录都会清除，Cookie 数据不会自动删除。</p>
+            <div>
+                <button class="button secondary" id="cancelDeleteButton">取消</button>
+                <button class="button danger" id="confirmDeleteButton">确认删除</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="toastContainer" class="toast-container"></div>
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

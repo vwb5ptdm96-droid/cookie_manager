@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.env
+browser_data/
+logs/
+.pytest_cache/
+.coverage
+.venv/
+.playwright-cli/
+output/
