@@ -13,15 +13,14 @@ import {
   deleteHealthTask,
   executeHealthTaskCheck,
   executeHealthTaskRepair,
-  fetchHealthTaskTimeline,
   fetchHealthTasks,
   toggleHealthTask,
   updateHealthTask,
   type HealthTaskCreatePayload,
   type HealthTaskItem,
   type HealthTaskUpdatePayload,
-  type TimelineEntry,
 } from "@/api/healthTasks";
+import HealthTaskTimelineDialog from "@/components/HealthTaskTimelineDialog.vue";
 
 const router = useRouter();
 
@@ -37,11 +36,8 @@ const togglingCode = ref<string | null>(null);
 const dialogVisible = ref(false);
 const editingTask = ref<HealthTaskItem | null>(null);
 const timelineVisible = ref(false);
-const timelineLoading = ref(false);
-const timelineEntries = ref<TimelineEntry[]>([]);
 const timelineTaskName = ref("");
-const timelineDetailVisible = ref(false);
-const timelineDetailContent = ref("");
+const timelineTaskCode = ref("");
 const activeTab = ref("detect");
 
 // ── JSON 编辑器 ──
@@ -226,23 +222,6 @@ function statusType(status: string): "success" | "danger" | "warning" | "info" {
 
 function statusLabel(status: string): string {
   return STATUS_LABELS[status] || status;
-}
-
-function shortTime(iso: string): string {
-  if (!iso) return "";
-  try {
-    return new Date(iso).toLocaleString("zh-CN", {
-      timeZone: "Asia/Shanghai",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: false,
-    });
-  } catch {
-    return iso;
-  }
 }
 
 function formatBeijingTime(iso: string | null | undefined): string {
@@ -443,23 +422,10 @@ function viewLogs(task: HealthTaskItem): void {
   router.push({ path: "/logs", query: { health_task_code: task.health_task_code } });
 }
 
-async function openTimeline(task: HealthTaskItem): Promise<void> {
+function openTimeline(task: HealthTaskItem): void {
   timelineTaskName.value = task.health_task_name;
-  timelineEntries.value = [];
+  timelineTaskCode.value = task.health_task_code;
   timelineVisible.value = true;
-  timelineLoading.value = true;
-  try {
-    timelineEntries.value = await fetchHealthTaskTimeline(task.health_task_code);
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : "加载执行记录失败");
-  } finally {
-    timelineLoading.value = false;
-  }
-}
-
-function openTimelineDetail(detail: string): void {
-  timelineDetailContent.value = detail;
-  timelineDetailVisible.value = true;
 }
 
 function handleAction(cmd: string, task: HealthTaskItem): void {
@@ -835,40 +801,11 @@ onMounted(loadData);
     </el-dialog>
 
     <!-- 执行时间线对话框 -->
-    <el-dialog v-model="timelineVisible" :title="`执行记录 - ${timelineTaskName}`" width="760px" top="8vh">
-      <div v-loading="timelineLoading" class="timeline">
-        <div v-if="!timelineLoading && timelineEntries.length === 0" class="timeline-empty">
-          暂无执行记录。执行检测或修复后会自动生成。
-        </div>
-        <div v-for="(entry, i) in timelineEntries" :key="i" class="timeline-item">
-          <div class="timeline-dot" :class="entry.result === 'SUCCESS' || entry.result === 'PASS' ? 'dot-success' : entry.result === 'FAIL' ? 'dot-fail' : 'dot-warn'" />
-          <div v-if="i < timelineEntries.length - 1" class="timeline-line" />
-          <div class="timeline-body">
-            <div class="timeline-header">
-              <span class="timeline-action">{{ entry.action }}</span>
-              <el-tag
-                :type="entry.result === 'SUCCESS' || entry.result === 'PASS' ? 'success' : entry.result === 'FAIL' ? 'danger' : 'warning'"
-                size="small"
-                effect="plain"
-              >{{ entry.result }}</el-tag>
-              <span class="timeline-time">{{ shortTime(entry.time) }}</span>
-            </div>
-            <el-button v-if="entry.detail" size="small" @click="openTimelineDetail(entry.detail)">详情</el-button>
-          </div>
-        </div>
-      </div>
-      <template #footer>
-        <el-button @click="timelineVisible = false">关闭</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- 时间线详情对话框 -->
-    <el-dialog v-model="timelineDetailVisible" title="执行详情" width="700px" top="10vh">
-      <pre class="detail-viewer"><code>{{ timelineDetailContent }}</code></pre>
-      <template #footer>
-        <el-button @click="timelineDetailVisible = false">关闭</el-button>
-      </template>
-    </el-dialog>
+    <HealthTaskTimelineDialog
+      v-model="timelineVisible"
+      :task-name="timelineTaskName"
+      :task-code="timelineTaskCode"
+    />
   </section>
 </template>
 
@@ -1018,99 +955,4 @@ onMounted(loadData);
   cursor: pointer;
 }
 
-/* ── 时间线 ── */
-.timeline {
-  position: relative;
-  padding: 8px 0;
-  min-height: 120px;
-}
-
-.timeline-empty {
-  text-align: center;
-  color: var(--color-text-secondary);
-  padding: 48px 0;
-}
-
-.timeline-item {
-  display: flex;
-  position: relative;
-  padding-left: 28px;
-  padding-bottom: 20px;
-}
-
-.timeline-item:last-child {
-  padding-bottom: 0;
-}
-
-.timeline-dot {
-  position: absolute;
-  left: 0;
-  top: 6px;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  border: 2px solid;
-  background: var(--color-surface);
-  z-index: 1;
-}
-
-.dot-success {
-  border-color: var(--el-color-success);
-}
-
-.dot-fail {
-  border-color: var(--el-color-danger);
-}
-
-.dot-warn {
-  border-color: var(--el-color-warning);
-}
-
-.timeline-line {
-  position: absolute;
-  left: 5px;
-  top: 20px;
-  width: 2px;
-  bottom: -4px;
-  background: var(--color-border);
-}
-
-.timeline-body {
-  flex: 1;
-  min-width: 0;
-}
-
-.timeline-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 6px;
-}
-
-.timeline-action {
-  font-weight: 600;
-  font-size: 14px;
-}
-
-.timeline-time {
-  margin-left: auto;
-  font-size: 12px;
-  color: var(--color-text-secondary);
-  white-space: nowrap;
-}
-
-.detail-viewer {
-  margin: 0;
-  padding: 10px 12px;
-  background: #1e1e1e;
-  color: #d4d4d4;
-  border-radius: 6px;
-  font-family: var(--font-family-mono);
-  font-size: 12px;
-  line-height: 1.55;
-  white-space: pre-wrap;
-  word-break: break-all;
-  max-height: 300px;
-  overflow: auto;
-}
 </style>

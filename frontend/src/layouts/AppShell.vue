@@ -16,9 +16,9 @@ const items = [
   { label: "部署配置", path: "/deploy" },
 ];
 
-const pageTitle = computed(() => String(route.meta.title ?? "Windows 原生 Session 维护任务系统"));
+const pageTitle = computed(() => String(route.meta.title ?? "Windows 原生 Session 健康检测与修复系统"));
 const pageDescription = computed(() =>
-  String(route.meta.description ?? "查看系统状态、执行维护动作，并在风控时切入人工修复闭环。"),
+  String(route.meta.description ?? "配置健康检测任务、追踪脚本运行，并在失败时自动修复或提醒。"),
 );
 </script>
 
@@ -26,7 +26,7 @@ const pageDescription = computed(() =>
   <div class="app-shell">
     <aside class="sidebar">
       <div class="brand">Session 维护系统</div>
-      <p class="brand-sub">Windows 单机部署 · 本机 Playwright · 人工修复闭环</p>
+      <p class="brand-sub">Windows 单机部署 · 本机 Playwright · 健康检测与自动修复</p>
       <nav class="nav-list" aria-label="主导航">
         <RouterLink
           v-for="item in items"

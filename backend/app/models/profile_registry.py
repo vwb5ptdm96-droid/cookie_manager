@@ -13,7 +13,6 @@ class ProfileRegistry(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     profile_key: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
-    task_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     relative_path: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="MISSING")
     is_locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

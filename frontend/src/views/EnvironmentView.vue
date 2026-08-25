@@ -93,7 +93,7 @@ onMounted(loadLatest);
       <div class="panel-header">
         <div>
           <h2>Windows 节点环境自检</h2>
-          <p>重点确认运行目录、数据库、当前用户和桌面会话是否满足维护脚本与人工修复的前置条件。</p>
+          <p>重点确认运行目录、数据库、当前用户和桌面会话是否满足健康检测与修复脚本的前置条件。</p>
         </div>
         <div class="toolbar-actions">
           <el-button :loading="loading" @click="loadLatest">查看最近结果</el-button>
@@ -125,7 +125,7 @@ onMounted(loadLatest);
         show-icon
         class="deploy-hint"
         title="部署建议"
-        description="如果桌面会话检查项为 WARN，请通过 RDP 登录部署机后再启动服务，确保人工修复浏览器可在桌面会话中正常打开。"
+        description="如果桌面会话检查项为 WARN，需在部署机当前桌面会话中启动服务，确保 headed 模式修复脚本可正常打开浏览器。"
       />
     </section>
   </section>

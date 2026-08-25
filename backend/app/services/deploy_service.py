@@ -19,7 +19,7 @@ class DeployService:
         current_user_hint = (
             f"当前运行用户为 {current_user}，检测到桌面会话 {session_name}。"
             if session_name
-            else f"当前运行用户为 {current_user}，未检测到明确桌面会话，人工修复前请确认通过 RDP 登录部署机。"
+            else f"当前运行用户为 {current_user}，未检测到明确桌面会话，headed 模式脚本可能需要桌面环境。"
         )
         return {
             "deploy_root": str(deploy_root),

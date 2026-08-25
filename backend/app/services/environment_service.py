@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import getpass
+import importlib.util
 import os
+import sys
 from pathlib import Path
 
-from sqlalchemy import Engine, select
+import httpx
+from sqlalchemy import Engine, inspect, select, text
 from sqlalchemy.orm import Session
 
 from app.models.env_check import EnvCheckResult
@@ -17,11 +20,16 @@ class EnvironmentService:
 
     def execute_checks(self) -> dict[str, object]:
         items = [
+            self._check_python_venv(),
+            self._check_playwright(),
+            self._check_chromium(),
             self._check_runtime_root(),
             self._check_runtime_subdir("profiles_dir", self.runtime_root / "profiles", "Profile 目录"),
             self._check_runtime_subdir("scripts_dir", self.runtime_root / "scripts", "脚本目录"),
             self._check_runtime_subdir("logs_dir", self.runtime_root / "logs", "日志目录"),
             self._check_database_connection(),
+            self._check_legacy_table(),
+            self._check_platform_network(),
             self._check_current_user(),
             self._check_desktop_session(),
         ]
@@ -88,6 +96,93 @@ class EnvironmentService:
             "summary": "数据库连接正常",
         }
 
+    def _check_python_venv(self) -> dict[str, object]:
+        in_venv = sys.prefix != sys.base_prefix
+        py_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+        status = "PASS" if in_venv else "WARN"
+        return {
+            "check_code": "python_venv",
+            "status": status,
+            "summary": f"Python {py_version} @ {sys.executable}" + ("" if in_venv else "（未使用虚拟环境）"),
+        }
+
+    def _check_playwright(self) -> dict[str, object]:
+        if importlib.util.find_spec("playwright") is None:
+            return {
+                "check_code": "playwright",
+                "status": "FAIL",
+                "summary": "Playwright 未安装，请执行 `playwright install chromium`",
+            }
+        return {
+            "check_code": "playwright",
+            "status": "PASS",
+            "summary": "Playwright 已安装",
+        }
+
+    def _check_chromium(self) -> dict[str, object]:
+        try:
+            from playwright.sync_api import sync_playwright
+
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                browser.close()
+        except Exception as exc:
+            return {
+                "check_code": "chromium",
+                "status": "FAIL",
+                "summary": f"Chromium/Chrome 启动失败: {exc}",
+            }
+        return {
+            "check_code": "chromium",
+            "status": "PASS",
+            "summary": "Chromium/Chrome 可正常启动",
+        }
+
+    def _check_legacy_table(self) -> dict[str, object]:
+        try:
+            inspector = inspect(self.engine)
+            tables = set(inspector.get_table_names())
+            legacy_tables = [t for t in tables if "cookie" in t.lower()]
+            if legacy_tables:
+                return {
+                    "check_code": "legacy_table",
+                    "status": "PASS",
+                    "summary": f"检测到旧 cookie 表: {', '.join(sorted(legacy_tables))}",
+                }
+            return {
+                "check_code": "legacy_table",
+                "status": "WARN",
+                "summary": "未找到含 cookie 的旧表，健康检测将无法查询登录态数据",
+            }
+        except Exception as exc:
+            return {
+                "check_code": "legacy_table",
+                "status": "FAIL",
+                "summary": f"旧 cookie 表查询失败: {exc}",
+            }
+
+    def _check_platform_network(self) -> dict[str, object]:
+        probe_url = os.environ.get("NETWORK_PROBE_URL", "https://www.baidu.com")
+        try:
+            resp = httpx.get(probe_url, timeout=5)
+            if resp.status_code < 400:
+                return {
+                    "check_code": "platform_network",
+                    "status": "PASS",
+                    "summary": f"网络可达: {probe_url} (HTTP {resp.status_code})",
+                }
+            return {
+                "check_code": "platform_network",
+                "status": "FAIL",
+                "summary": f"网络探测返回异常状态: HTTP {resp.status_code}",
+            }
+        except Exception as exc:
+            return {
+                "check_code": "platform_network",
+                "status": "FAIL",
+                "summary": f"网络不可达: {probe_url} ({exc})",
+            }
+
     def _check_current_user(self) -> dict[str, object]:
         return {
             "check_code": "current_user",
@@ -106,5 +201,5 @@ class EnvironmentService:
         return {
             "check_code": "desktop_session",
             "status": "WARN",
-            "summary": "未检测到明确桌面会话，人工修复前请确认通过 RDP 登录部署机",
+            "summary": "未检测到明确桌面会话，headed 模式脚本可能需要桌面环境",
         }

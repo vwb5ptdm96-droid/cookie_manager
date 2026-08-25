@@ -32,6 +32,7 @@ from app.models.health_task import HealthTask
 from app.models.profile_registry import ProfileRegistry
 from app.models.script_registry import ScriptRegistry
 from app.models.script_run import ScriptRun
+from app.services.chrome_utils import kill_chrome_for_profile, kill_chrome_on_port
 from app.services.legacy_cookie_service import LegacyCookieLookup, LegacyCookieService
 from app.services.local_windows_executor import LocalWindowsExecutor
 from app.services.notification_service import send_feishu_notification
@@ -55,67 +56,6 @@ class HealthTaskService:
         self.log_service = RunLogService(engine=engine)
 
     # ── Chrome 进程清理 ──
-
-    @staticmethod
-    def _kill_chrome_for_profile(profile_path: Path) -> None:
-        """杀掉占用指定 user-data-dir 的 Chrome 进程（包括子进程），防止缓存污染。"""
-        import base64
-        import subprocess
-
-        profile_str = str(profile_path).replace("/", "\\")
-        # 用 -EncodedCommand 解决中文路径编码问题
-        ps_script = (
-            f'Get-CimInstance Win32_Process -Filter "name=\'chrome.exe\'" | '
-            f'Where-Object {{ $_.CommandLine -like \'*--user-data-dir={profile_str.replace("'", "''")}*\' }} | '
-            f'Stop-Process -Force -PassThru'
-        )
-        encoded = base64.b64encode(ps_script.encode("utf-16le")).decode()
-        try:
-            result = subprocess.run(
-                ["powershell", "-NoProfile", "-EncodedCommand", encoded],
-                capture_output=True, text=True, timeout=15,
-            )
-            if result.stdout.strip():
-                killed = [l for l in result.stdout.strip().splitlines() if l.strip()]
-                if killed:
-                    logger.info("Chrome cleanup for %s: killed %d process(s)", profile_str, len(killed))
-        except subprocess.TimeoutExpired:
-            logger.warning("Chrome cleanup timed out for %s", profile_str)
-        except Exception as exc:
-            logger.warning("Chrome cleanup error for %s: %s", profile_str, exc)
-
-        # Chrome 被强制杀掉后会残留 lockfile，导致下次无法启动
-        for lock_file in ("lockfile", "SingletonLock", "SingletonSocket"):
-            p = profile_path / lock_file
-            if p.is_file():
-                try:
-                    p.unlink()
-                    logger.info("Removed Chrome lockfile: %s", p)
-                except Exception as exc:
-                    logger.warning("Failed to remove lockfile %s: %s", p, exc)
-
-    @staticmethod
-    def _kill_chrome_on_port(cdp_port: int) -> None:
-        """通过端口号杀掉占用 CDP 端口的 Chrome 进程（兜底方案）。"""
-        import subprocess
-
-        try:
-            # netstat 找 PID
-            result = subprocess.run(
-                ["netstat", "-ano"], capture_output=True, text=True, timeout=10,
-            )
-            for line in result.stdout.splitlines():
-                if f":{cdp_port}" in line and "LISTENING" in line:
-                    parts = line.strip().split()
-                    pid = parts[-1] if parts else ""
-                    if pid.isdigit():
-                        subprocess.run(
-                            ["taskkill", "-f", "-pid", pid],
-                            capture_output=True, text=True, timeout=5,
-                        )
-                        logger.info("Killed Chrome on port %d (PID %s)", cdp_port, pid)
-        except Exception as exc:
-            logger.warning("Port-based Chrome cleanup failed for port %d: %s", cdp_port, exc)
 
     # ── CRUD ──
 
@@ -360,9 +300,10 @@ class HealthTaskService:
                     if isinstance(response_body, (dict, list))
                     else str(response_body)
                 )
-                response_body_preview = body_str[:50]
+                masked_body = self._mask_sensitive(body_str)
+                response_body_preview = masked_body[:50]
                 add_step(f"✅ HTTP 请求完成: 状态码 {response_status}")
-                add_step(f"响应内容:\n{body_str[:2000]}")
+                add_step(f"响应内容:\n{masked_body[:2000]}")
 
                 # ── 4. 评规则 ──
                 failure_hit = self._match_rule(row.failure_rule, response_status, response_body)
@@ -599,8 +540,8 @@ class HealthTaskService:
             "TXY_MOBILE_PHONE": row.mobile_phone or "",
         }
         # 清理同目录的旧 Chrome 进程，避免连接旧实例或缓存污染
-        self._kill_chrome_for_profile(profile_absolute_path)
-        self._kill_chrome_on_port(cdp_port)
+        kill_chrome_for_profile(profile_absolute_path)
+        kill_chrome_on_port(cdp_port)
         try:
             result = self.executor.execute(
                 script_path=script_path,
@@ -614,8 +555,8 @@ class HealthTaskService:
             raise AppError(f"执行脚本失败: {exc}", "EXECUTION_FAILED")
         finally:
             # 脚本结束后清理 Chrome，确保不残留
-            self._kill_chrome_for_profile(profile_absolute_path)
-            self._kill_chrome_on_port(cdp_port)
+            kill_chrome_for_profile(profile_absolute_path)
+            kill_chrome_on_port(cdp_port)
 
         end_time = beijing_now()
         duration_ms = int((end_time - start_time).total_seconds() * 1000)
@@ -686,6 +627,18 @@ class HealthTaskService:
 
             session.commit()
             session.refresh(row_ref)
+
+            # 写入 REPAIR 运行日志（Spec REQ-006），在状态提交后执行避免锁冲突
+            self.log_service.write(
+                run_id=run_id,
+                run_type="REPAIR",
+                task_id=row_ref.id,
+                status=status,
+                title=row_ref.health_task_name or health_task_code,
+                message=result.get("message", result.get("status", "")) or "",
+                log_file_path=str(artifact_dir / "run.log") if (artifact_dir / "run.log").exists() else None,
+            )
+
             return self._serialize(row_ref)
 
     def delete_task(self, health_task_code: str) -> None:
@@ -881,6 +834,44 @@ class HealthTaskService:
                 f"运行模式必须为 HEADLESS 或 HEADED，收到: {run_mode}",
                 "INVALID_PAYLOAD",
             )
+
+    @staticmethod
+    def _mask_sensitive(text: str) -> str:
+        """对可能含敏感信息的文本做脱敏：cookie/token/密码/手机号/验证码等。
+
+        Spec 6.3 / §8 隐私 P0：日志和通知不得明文记录 cookie、凭证或密码。
+        """
+        if not text:
+            return text
+        masked = text
+        # 1. JSON 键值对中的敏感键：`"key": "value"` → 值整体打码
+        sensitive_keys = re.compile(
+            r'(?i)("(?:cookie|set-cookie|token|access_token|refresh_token|'
+            r'password|passwd|secret|api[_-]?key|authorization|captcha|sms[_-]?code|'
+            r'verify[_-]?code|mobile|phone|phone_number)["\']?\s*[:=]\s*["\']?)([^"\',}\s][^"\',}]{0,80})',
+        )
+
+        def _mask_value(match: re.Match[str]) -> str:
+            prefix = match.group(1)
+            return f"{prefix}***"
+
+        masked = sensitive_keys.sub(_mask_value, masked)
+
+        # 2. 裸 Bearer / Basic 令牌
+        masked = re.sub(
+            r"(?i)(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}",
+            r"\1 ***",
+            masked,
+        )
+
+        # 3. 11 位中国大陆手机号
+        masked = re.sub(
+            r"(?<!\d)1[3-9]\d{9}(?!\d)",
+            "138****0000",
+            masked,
+        )
+
+        return masked
 
     def _match_rule(
         self, rule_json: str | None, status_code: int, body: object
