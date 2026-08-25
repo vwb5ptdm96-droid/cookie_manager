@@ -1,5 +1,16 @@
 # Product Spec Changelog
 
+## 2026-08-25 · Cookie 扩展采集迭代
+
+- 新增：Cookie 扩展采集任务模块（独立模块，复用健康检测检测逻辑，失效动作=扩展采集，不绑定目录；导航位于健康检测任务之后）。
+- 新增：采集映射表（`(worker_id, domain) → channel/shop_name/mobile_phone/dns`，写库正向映射 + 任务触发反向查询双向使用）。
+- 新增：扩展接入 API 接收端（`/api/ping`、`/api/request`、`/api/tasks`、`/api/tasks/{id}/report`、`/api/cookies`，非 ping 接口 `X-API-Key` 鉴权）。
+- 新增：采集 cookie 写回 `ods_cookie_playwright`（先查后改，填 `cookie` + `str_cookie`）。
+- 新增：REQ-007 采集任务管理、REQ-008 采集映射管理、REQ-009 扩展接入 API；数据模型新增 CookieSyncTask/CookieSyncMapping/CookieSyncJob。
+- 调整：OUT-006 明确为不重构旧表结构，但新增写回能力；Q-004 已定（后端代写接口）。
+- 删除：原方案"脚本库 CUSTOM 采集通道条目"（管理面收敛到采集任务模块内，不新增导航之外的入口）。
+- 说明：同一同事同一域名的多店铺登录态本版不处理，一个 (worker_id, domain) 对应一条业务记录（ASM-005）。
+
 ## 2026-08-25
 
 - **Spec 漂移回写**：补充 REQ-001 修复 cron（`repair_cron_expression`）、REQ-003 Profile 绑定脚本、REQ-004 脚本运行配置（`default_run_mode/default_cdp_port/default_timeout_seconds/supports_pause/cancel`）、ASM-003 无 cron 任务 5 分钟兜底调度。

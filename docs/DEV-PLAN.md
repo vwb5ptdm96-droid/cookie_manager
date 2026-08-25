@@ -14,6 +14,7 @@
 - Profile 目录注册、锁定/解锁、复检（锁定由脚本运行持有）
 - 环境自检、部署配置说明、运行日志检索
 - 全局快捷操作（执行环境自检、上传脚本）
+- Cookie 扩展采集：采集任务检测（失效→扩展补采→写回→复检）、扩展接入 API、映射管理
 
 ## 2. 当前技术栈
 
@@ -53,6 +54,10 @@
 5. 脚本运行实例（ScriptRun）与控制能力
 6. 环境自检、部署说明、日志检索、前端导航收敛
 7. Spec / Design Brief 对齐、联调、验收、发布准备
+8. Cookie 采集数据模型与扩展写回能力
+9. 扩展接入 API 接收端（任务队列 + 正向映射写库）
+10. 采集任务检测与扩展采集闭环（复用健康检测检测逻辑）
+11. 采集模块前端页面（采集任务 / 映射管理 / 扩展接入）
 
 ## 5. 阶段规划
 
@@ -248,36 +253,114 @@
 - 前端 `npm run build` 通过，导航与快捷操作符合新 Spec
 - 主链路 `定时检测 -> 失败 -> 自动修复 -> 飞书提醒 -> 状态回写` 跑通
 
+### Phase 7：Cookie 采集数据模型与扩展写回能力 ⏳
+
+**目标**
+
+建立采集任务、映射、任务队列三张表，并让 legacy cookie 服务具备先查后改的写回能力，作为采集模块的数据地基。
+
 **交付物**
 
-- 对齐全部 P0 页面与 `Design-Brief.md` 的布局、状态、组件与文案规范
-- 补齐全局快捷操作、详情弹窗、空态、错误态、成功反馈
-- 收紧 README、启动命令、迁移命令、目录说明、运行指南
-- 跑通端到端主流程与发布前验证
+- 新增 CookieSyncTask / CookieSyncMapping / CookieSyncJob 模型与 Alembic 迁移
+- 扩展 `legacy_cookie_service.py`：按 `(channel, shop_name, mobile_phone, dns)` 先查后改写回旧表（填 `cookie` JSON + `str_cookie` 拼接串）
+- `config.py` 新增 `COOKIE_SYNC_API_KEY` 配置（.env / .env.example）
 
 **关键文件**
 
-- `session-maintenance-system/frontend/src/layouts/AppShell.vue`
-- `session-maintenance-system/frontend/src/components/QuickActionBar.vue`
-- `session-maintenance-system/frontend/src/views/DashboardView.vue`
-- `session-maintenance-system/frontend/src/views/SessionTasksView.vue`
-- `session-maintenance-system/frontend/src/views/HealthChecksView.vue`
-- `session-maintenance-system/frontend/src/views/ProfilesView.vue`
-- `session-maintenance-system/frontend/src/views/ScriptsView.vue`
-- `session-maintenance-system/frontend/src/views/RepairsView.vue`
-- `session-maintenance-system/frontend/src/views/EnvironmentView.vue`
-- `session-maintenance-system/frontend/src/views/DeployView.vue`
-- `session-maintenance-system/frontend/src/views/LogsView.vue`
-- `session-maintenance-system/backend/app/api/routes/*.py`
-- `session-maintenance-system/README.md`
-- `session-maintenance-system/start_backend.bat`
+- `backend/alembic/versions/*.py`（新增三表迁移）
+- `backend/app/models/cookie_sync_task.py`
+- `backend/app/models/cookie_sync_mapping.py`
+- `backend/app/models/cookie_sync_job.py`
+- `backend/app/models/__init__.py`（注册新模型）
+- `backend/app/services/legacy_cookie_service.py`（写回方法）
+- `backend/app/core/config.py`、`.env.example`、`.env`（`COOKIE_SYNC_API_KEY`）
 
 **完成标准**
 
-- `Product-Spec.md` 中全部 P0 页面、动作、字段、状态已覆盖
-- `Design-Brief.md` 中视觉风格、组件规范、间距、字体、状态样式已落地
-- 后端测试、前端构建、迁移验证全部通过
-- 主链路 `创建任务 -> 检测失败 -> 触发维护 -> 风控转人工修复 -> 复检 -> 恢复可用` 跑通
+- 空库迁移可建出三张新表，`cookie_sync_mapping` 以 `(worker_id, domain)` 唯一
+- legacy 写回：已有记录更新、无记录插入，`str_cookie` 拼接正确
+- 后端测试通过（含写回单测）
+
+### Phase 8：扩展接入 API 接收端 ⏳
+
+**目标**
+
+实现 Chrome 扩展契约五条接口，`X-API-Key` 鉴权，正向映射写库，任务队列定向出队，让同事电脑上的扩展能连上平台。
+
+**交付物**
+
+- 新增 cookie_sync 路由：`GET /api/ping`（无鉴权）、`POST /api/request`、`GET /api/tasks?worker_id=`、`POST /api/tasks/{id}/report`、`POST /api/cookies`
+- 新增 `X-API-Key` 鉴权依赖（非 ping 接口校验 `COOKIE_SYNC_API_KEY`）
+- 新增 `cookie_sync_service`：任务入队/定向匹配、上报按映射正向写库、无映射丢弃记 WARN、上报 worker 与定向不一致以定向为准
+- 注册路由到 `main.py`
+
+**关键文件**
+
+- `backend/app/api/routes/cookie_sync.py`
+- `backend/app/api/deps.py`（`X-API-Key` 校验依赖）
+- `backend/app/services/cookie_sync_service.py`
+- `backend/app/main.py`
+
+**完成标准**
+
+- 用 TestClient 走通 `ping → request → tasks?worker_id → report`，库中按映射写入正确（cookie + str_cookie）
+- 无/错 `X-API-Key` 返回 401；无映射上报丢弃并记 WARN 日志
+
+### Phase 9：采集任务检测与扩展采集闭环 ⏳
+
+**目标**
+
+实现采集任务 CRUD 与"检测失效→扩展采集→写回→复检"闭环，复用健康检测的检测执行逻辑，飞书通知收尾。
+
+**交付物**
+
+- 采集任务 CRUD / 启停 / 克隆 / 删除 / 立即检测 路由与 service
+- 复用健康检测检测逻辑：读 legacy cookie → 构造请求 → 成功/失败规则判定
+- 失效时按映射反向查 `(worker_id, domain)` → 入队采集任务（定向派给该 worker）→ 等待上报（`sync_wait_timeout_seconds` 默认 180）→ 写回旧表 → 复检
+- 复检通过 `PASS`；无映射 / 等待超时 / 复检仍失败 → `FAIL` + 飞书
+- APScheduler 扩展扫描启用采集任务，按 cron 触发检测
+
+**关键文件**
+
+- `backend/app/api/routes/cookie_sync_tasks.py`
+- `backend/app/services/cookie_sync_task_service.py`
+- `backend/app/schemas/cookie_sync_task.py`
+- `backend/app/services/scheduler_service.py`（采集任务扫描）
+- `backend/app/services/notification_service.py`（复用飞书）
+
+**完成标准**
+
+- 建采集任务 → 检测失效 → 进入 `SYNCING` → 模拟扩展上报 → 写回 → 复检 `PASS`
+- 无映射 / 超时 → `FAIL` + 飞书；后端测试与编译通过
+
+### Phase 10：采集模块前端页面 ⏳
+
+**目标**
+
+导航加入口，实现采集任务、映射管理、扩展接入三个页面，与后端联通。
+
+**交付物**
+
+- 导航新增「Cookie 采集任务」入口（位于健康检测任务之后）
+- 采集任务列表 / 编辑弹窗（检测配置 / 调度 / 同步设置三 Tab）、启停、克隆、删除、立即检测
+- 映射管理页：`worker_id / domain / channel / shop_name / mobile_phone / dns` CRUD
+- 扩展接入信息页：后端地址、`COOKIE_SYNC_API_KEY`、扩展安装指引
+- API client：`cookieSyncTasks.ts` / `cookieSyncMappings.ts`
+- 将扩展包复制纳入仓库 `extension/` 便于分发
+
+**关键文件**
+
+- `frontend/src/router/index.ts`、`frontend/src/layouts/AppShell.vue`
+- `frontend/src/views/CookieSyncTasksView.vue`
+- `frontend/src/views/CookieSyncMappingView.vue`
+- `frontend/src/views/CookieSyncAccessView.vue`
+- `frontend/src/api/cookieSyncTasks.ts`、`frontend/src/api/cookieSyncMappings.ts`
+- `extension/`（从 `D:\公司小疑问\chrome扩展` 复制）
+
+**完成标准**
+
+- 采集任务与映射可在页面增删改查，立即检测/触发采集与后端联通
+- 扩展接入信息页展示地址、密钥、安装步骤；前端 `npm run build` 通过
 
 ## 6. 数据库表与归属阶段
 
@@ -289,7 +372,10 @@
 | `profile_registry` | Phase 2 / 3 | Profile 目录路径、锁状态（`is_locked`/`lock_owner`/`lock_run_id`） |
 | `task_run_log` | Phase 2 / 7 | 健康检测、修复脚本运行日志 |
 | `env_check_result` | Phase 2 / 7 | 最近一次环境自检结果 |
-| `ods_cookie_playwright` | 外部依赖 | legacy cookie 数据来源，只读接入 |
+| `cookie_sync_task` | Phase 7 / 9 | 采集任务：检测配置、调度、同步超时、状态 |
+| `cookie_sync_mapping` | Phase 7 / 8 | 采集映射：`(worker_id, domain) → channel/shop_name/mobile_phone/dns` |
+| `cookie_sync_job` | Phase 7 / 8 | 扩展采集任务队列：`task_id/worker_id/domains/status` |
+| `ods_cookie_playwright` | 外部依赖 | legacy cookie 数据来源；健康检测只读，扩展采集写回（Phase 7 起具备写回能力） |
 | `session_maintenance_task` | 已废弃 | 旧维护任务表，保留数据不再读写 |
 | `health_check_config` | 已废弃 | 旧健康检测表，保留数据不再读写 |
 | `manual_repair_ticket` | 已废弃 | 旧人工修复工单表，保留数据不再读写 |
@@ -305,5 +391,15 @@
 
 ## 8. 建议执行顺序
 
-如果按全新项目推进，严格按 Phase 1 到 Phase 6 执行。  
-如果基于当前仓库继续推进，Phase 1-5 已实现，当前处于 **Phase 6（旧模块清理与发布收口）**：删除废弃模块、收敛导航、恢复构建、回归测试，然后做完整联调与发布准备。
+如果按全新项目推进，严格按 Phase 1 到 Phase 10 执行。  
+如果基于当前仓库继续推进，Phase 1-5 已实现，旧模块清理（Phase 6 主体）已完成。后续：
+
+1. **Phase 6 收口**：确认导航/快捷操作/README/启动说明/回归测试已收敛到 7 项导航的新架构（当前代码已基本达成，做最终回归）。
+2. **Phase 7-10（Cookie 扩展采集模块）**：
+   - Phase 7 采集数据模型与扩展写回能力
+   - Phase 8 扩展接入 API 接收端
+   - Phase 9 采集任务检测与扩展采集闭环
+   - Phase 10 采集模块前端页面
+3. 全部通过后做完整联调与发布准备。
+
+> 说明：扩展本体（Chrome 扩展）已在 `D:\公司小疑问\chrome扩展` 联调验证过，平台侧只需实现接收端 API，扩展代码不改（Phase 8 以现有 `background.js` 契约为准；Phase 10 将扩展包纳入仓库便于分发）。

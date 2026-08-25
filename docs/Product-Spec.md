@@ -58,6 +58,10 @@
 | SCOPE-008 | 运行日志 | P0 | 提供任务/检测/脚本执行的运行记录与筛选 |
 | SCOPE-009 | MySQL 数据模型、后端 API、调度能力 | P0 | 使用 APScheduler 扫描启用的健康检测任务 |
 | SCOPE-010 | 飞书失败通知 | P0 | 检测失败或修复风控时发送飞书提醒 |
+| SCOPE-011 | Cookie 扩展采集任务模块 | P0 | 独立模块，复用健康检测检测逻辑；失效动作=扩展采集；不绑定目录 |
+| SCOPE-012 | 采集映射表管理 | P0 | `(worker_id, domain) → (channel/shop_name/mobile_phone/dns)`，写库与反查双向使用 |
+| SCOPE-013 | 扩展接入 API 接收端 | P0 | `/api/ping` `/api/request` `/api/tasks` `/api/tasks/{id}/report` `/api/cookies`，`X-API-Key` 鉴权 |
+| SCOPE-014 | 采集 cookie 写回旧表 | P0 | 先查后改写回 `ods_cookie_playwright`，填 `cookie` + `str_cookie` |
 
 ### 2.2 不在本版本范围
 
@@ -68,9 +72,12 @@
 | OUT-003 | 面向外部客户的多租户能力 | 当前定位是公司内部运维系统 |
 | OUT-004 | 自动绕过短信、扫码、验证码、设备验证 | 风控场景只提醒不自动处理，不做自动化冒险 |
 | OUT-005 | 自主 Agent 编排、多 Agent 协作 | 该产品是传统运维系统，不是 Agent 产品 |
-| OUT-006 | 替换或重构旧 cookie 表结构 | 当前系统只读写既有旧表，不改其主键结构 |
+| OUT-006 | 重构旧 cookie 表结构 | 沿用既有字段（channel/shop_name/mobile_phone/DNS/cookie/str_cookie 等）；新增扩展采集写回能力，但不新增、不修改旧表列结构 |
 | OUT-007 | 人工修复工单、打开修复浏览器、复检闭环 | 已废弃，失败只通过飞书提醒 |
 | OUT-008 | 独立"维护任务"模块与旧版"健康检测"模块 | 已废弃，被健康检测任务统一取代 |
+| OUT-009 | 同一同事同一域名的多店铺登录态区分 | 本版假设一个 (worker_id, domain) 对应一条业务记录，多店铺场景浏览器侧需分 Profile，暂不处理 |
+| OUT-010 | 健康检测任务与采集任务自动联动 | 采集任务独立于健康检测任务，检测任务不自动触发采集，两个模块互不耦合 |
+| OUT-011 | 采集任务绑定目录/Profile | 采集任务无目录页，不绑定 ProfileRegistry |
 
 ---
 
@@ -82,6 +89,7 @@
 | TASK-002 | 为旧 cookie 登录态配置检测并触发自动修复 | 内部运维/开发人员 | P0 |
 | TASK-003 | 管理本机 Profile 与脚本资源，保障任务可执行 | 内部运维/开发人员 | P0 |
 | TASK-004 | 查看系统健康、部署环境和运行日志，快速定位问题 | 内部运维/开发人员 | P0 |
+| TASK-005 | 管理 Cookie 扩展采集：采集任务、映射、扩展接入 | 内部运维/开发人员 | P0 |
 
 ---
 
@@ -170,6 +178,59 @@
 **完成状态：**
 用户可清楚知道当前部署机能否执行健康检测任务以及具体卡在哪个检查项。
 
+### FLOW-004: Cookie 采集任务检测与扩展采集闭环
+
+**关联任务：** TASK-005  
+**优先级：** P0  
+**目标：** 让用户创建一条 Cookie 采集任务，定时/手动检测旧 cookie 有效性，失效时通过同事浏览器扩展采集新 cookie 写回旧表，实现检测→补采→复检闭环。
+
+**入口：**  
+用户进入"Cookie 采集任务"页面，点击"新增采集任务"。
+
+**主路径：**
+1. 用户填写采集任务检测配置（名称、cookie 表、channel、shop_name、mobile_phone、DNS、检测 URL、请求方法、请求头/请求体 JSON、成功/失败规则）与调度配置。
+2. 系统按 cron 或手动触发执行检测：从旧表按 `cookie_table + channel + shop_name + mobile_phone + DNS` 读取 cookie，组装请求并判定有效性。
+3. 若检测通过，任务状态为 `PASS`。
+4. 若检测失败，系统通过映射表反向查找该业务记录对应的 `(worker_id, domain)`：
+   - 找到映射 → 下发扩展采集任务（task 入队，定向派给该 worker）→ 等待同事扩展上报（`sync_wait_timeout_seconds` 默认 180）→ 按映射写回 `ods_cookie_playwright`（先查后改，填 `cookie` + `str_cookie`）→ 复检。
+   - 复检通过 → `PASS`；复检仍失败、等待超时或无映射 → `FAIL` 并发送飞书通知。
+5. 系统记录运行日志与采集任务实例状态。
+
+**分支路径：**
+- 无映射：检测失败后找不到对应 `(worker_id, domain)`，直接 `FAIL` + 飞书，不触发采集。
+- 扩展上报的域名与映射 `dns` 不匹配：丢弃该上报并记 WARN 日志，不写库。
+- 采集等待超时：按采集失败处理，任务 `FAIL` + 飞书。
+
+**边界情况：**
+- 检测配置与健康检测任务一致，但采集任务不绑定修复脚本与目录。
+- 写回旧表采用先查后改（不依赖旧表唯一索引）。
+
+**完成状态：**
+用户可在采集任务列表、运行日志看到本次检测、采集、复检结果；失效时若采集成功则状态恢复，否则收到飞书通知。
+
+### FLOW-005: 扩展轮询上报与写库
+
+**关联任务：** TASK-005  
+**优先级：** P0  
+**目标：** 同事电脑上的扩展按配置周期轮询平台，发现派给自己的采集任务后读取浏览器 cookie 并上报。
+
+**主路径：**
+1. 扩展配置 `backendUrl`（平台地址）、`workerId`（采集者编号）、`apiKey`、`domains`。
+2. 扩展按轮询周期（默认 30s，Chrome alarm 最小 30s）`GET /api/tasks?worker_id=xxx`。
+3. 有任务 → `chrome.cookies.getAll({domain})` 读取该域名 cookie → `POST /api/tasks/{id}/report` 上报。
+4. 平台校验 `X-API-Key`，按映射表将 cookie 写回 `ods_cookie_playwright`。
+
+**分支路径：**
+- 定时兜底/立即同步走 `POST /api/cookies` 直接推送，同样按映射写库。
+- 上报的 `worker_id` 与任务定向 worker 不一致时，以任务定向 worker 为准。
+
+**边界情况：**
+- 扩展配置的 `worker_id` 与映射表 `worker_id` 一致，归属才正确。
+- 无映射的上报丢弃并记 WARN 日志，不写库。
+
+**完成状态：**
+扩展读取的 cookie 已按映射归属写回旧表，采集任务可复检。
+
 ---
 
 ## 5. 功能需求
@@ -181,6 +242,7 @@
 - 整体采用后台运维工作台结构：左侧固定导航栏 + 右侧主内容区。
 - 左侧导航 MUST 按以下顺序提供一级入口：
   - 健康检测任务
+  - Cookie 采集任务
   - 脚本库
   - 目录库
   - 脚本运行
@@ -229,6 +291,7 @@
 | 运行日志 | 筛选栏 + 时间线/表格 | 时间、类型、状态、标题、消息、关联对象 | 筛选、查看详情 |
 | 环境自检 | 自检结果卡片/列表 | 检查项、状态、说明、明细 | 执行自检、查看详情 |
 | 部署配置 | 配置说明页 | 根目录、运行目录、关键子目录、启动方式、端口、当前运行用户提示 | 查看配置 |
+| Cookie 采集任务 | 任务列表 + 映射管理 + 扩展接入 | 采集任务名、cron、cookie 定位信息、检测 API、状态、最近检测/采集时间；映射：worker_id、domain、channel、shop_name、mobile_phone、dns | 新增、编辑、启停、删除、立即检测、查看日志；映射增删改；扩展接入信息展示 |
 
 #### IA-005: 表格列与详情弹窗要求
 
@@ -596,6 +659,149 @@
 - [ ] AC-002: Given 系统执行过任务或检测, when 用户进入日志页, then 用户能按类型、状态、关键字筛选日志。
 - [ ] AC-003: Given 某任务执行失败, when 用户查看日志详情, then 用户能定位到关联任务与失败信息。
 
+### REQ-007: Cookie 采集任务管理
+
+**优先级：** P0  
+**关联任务：** TASK-005  
+**关联流程：** FLOW-004, FLOW-005  
+
+**用途：**  
+独立模块，复用健康检测任务的检测配置与调度逻辑，但失效动作改为扩展采集（同事浏览器扩展补采 cookie 并写回旧表），不绑定脚本与目录。
+
+**行为：**  
+用户可创建、编辑、启停、克隆、删除采集任务；手动/定时检测；检测失效时触发扩展采集并复检；查看采集任务运行日志与状态。
+
+**规则：**
+- MUST 复用健康检测任务的检测配置字段：`cookie_table/channel/shop_name/mobile_phone/dns/check_url/http_method/http_headers/http_body/success_rule/failure_rule`。
+- MUST 复用调度字段：`enabled/cron_expression/check_timeout_seconds/retry_count`。
+- MUST 失效动作 = 扩展采集：通过映射表反向查找 `(worker_id, domain)`，下发采集任务（定向派给该 worker），等待上报（`sync_wait_timeout_seconds` 默认 180），写回旧表，复检。
+- MUST NOT 绑定修复脚本与目录（无 `repair_script_id` / `repair_directory_id`），无目录锁冲突。
+- MUST 支持状态 `PENDING/PASS/FAIL/DISABLED/SYNCING`；`SYNCING` 表示等待扩展上报。
+- MUST 最终 `FAIL` 时发送飞书通知（无映射、等待超时、复检仍失败均视为 `FAIL`）。
+- MUST 无映射时直接 `FAIL` + 飞书，不触发采集。
+- SHOULD 支持克隆采集任务以复制配置。
+
+**输入：**
+
+| 字段 | 类型 | 必填 | 校验规则 |
+|---|---|---:|---|
+| cookie_sync_task_name | string | Yes | 非空 |
+| cookie_table | string | Yes | 默认 `ods_cookie_playwright` |
+| channel | string | Yes | 非空 |
+| shop_name | string | No | 可空 |
+| mobile_phone | string | No | 可空 |
+| dns | string | No | 可空 |
+| check_url | string | Yes | 合法 URL |
+| http_method | string | Yes | `GET/POST` 等合法 HTTP 方法 |
+| http_headers / http_body | json | No | 合法 JSON |
+| success_rule / failure_rule | json | No | 合法 JSON |
+| cron_expression | string | No | 合法 cron 表达式 |
+| sync_wait_timeout_seconds | number | No | 默认 180 |
+
+**输出 / 结果：**
+- 采集任务被创建、更新、启停、克隆或删除。
+- 执行后产生最近检测/采集时间、运行状态、日志；失效时触发扩展采集并留下采集记录。
+
+**状态：**
+- 默认：显示采集任务列表。
+- 加载：检测或采集处理中。
+- 空状态：无采集任务时显示空提示。
+- 错误：表单校验失败、检测请求失败、无映射、采集超时给出明确错误。
+- 成功：任务保存成功或检测/采集完成，状态同步刷新。
+
+**验收标准：**
+- [ ] AC-001: Given 用户填写完整采集任务信息, when 点击保存, then 系统成功创建任务并在列表显示。
+- [ ] AC-002: Given 检测失效且存在对应映射, when 检测完成, then 系统下发采集任务并进入 `SYNCING` 状态，上报后写回旧表并复检。
+- [ ] AC-003: Given 检测失效且无对应映射, when 检测完成, then 任务直接 `FAIL` 并发送飞书通知，不触发采集。
+- [ ] AC-004: Given 采集等待超过 `sync_wait_timeout_seconds`, when 超时, then 任务 `FAIL` 并发送飞书通知。
+
+### REQ-008: 采集映射管理
+
+**优先级：** P0  
+**关联任务：** TASK-005  
+**关联流程：** FLOW-004, FLOW-005  
+
+**用途：**  
+维护采集者到业务记录的映射：`(worker_id, domain) → (channel, shop_name, mobile_phone, dns)`。写库时用正向映射填旧表字段；任务触发时用反向映射查该问哪位同事采集。
+
+**行为：**  
+用户可对映射表增删改查，查看某 worker 的最近上报时间。
+
+**规则：**
+- MUST 以 `(worker_id, domain)` 为唯一键，一个组合对应一条业务记录。
+- MUST 支持增删改查；删除映射前需检查是否有采集任务依赖该业务记录。
+- MUST 扩展上报时校验上报域名与映射 `dns` 一致，不一致则丢弃并记 WARN 日志。
+- SHOULD 展示每个 `worker_id` 的最近上报时间与上报条数。
+- 可建必可删：映射支持删除路径。
+
+**输入：**
+
+| 字段 | 类型 | 必填 | 校验规则 |
+|---|---|---:|---|
+| worker_id | string | Yes | 唯一（与 domain 组合） |
+| domain | string | Yes | 合法域名 |
+| channel | string | Yes | 非空 |
+| shop_name | string | No | 可空 |
+| mobile_phone | string | No | 可空 |
+| dns | string | Yes | 应与 domain 一致 |
+| remark | string | No | 可空 |
+
+**输出 / 结果：**
+- 映射保存或更新成功，可用于写库与反查。
+
+**状态：**
+- 默认：显示映射列表。
+- 加载：增删改查处理中。
+- 空状态：暂无映射。
+- 错误：`(worker_id, domain)` 重复、dns 与 domain 不一致、被采集任务依赖。
+- 成功：映射生效。
+
+**验收标准：**
+- [ ] AC-001: Given 用户新增映射, when 保存, then 映射列表出现且可被任务反查、扩展上报正向映射。
+- [ ] AC-002: Given 用户提交重复的 `(worker_id, domain)`, when 保存, then 系统拒绝并提示冲突。
+- [ ] AC-003: Given 某映射被采集任务依赖, when 删除, then 系统阻止并提示依赖。
+
+### REQ-009: 扩展接入 API 接收端
+
+**优先级：** P0  
+**关联任务：** TASK-005  
+**关联流程：** FLOW-005  
+
+**用途：**  
+实现 Chrome 扩展（Cookie 同步助手）契约的接收端接口，让同事电脑上的扩展可连接平台完成任务轮询与上报。
+
+**行为：**  
+平台提供扩展契约五条接口；校验 `X-API-Key`；接收上报 cookie 按映射写回旧表；无映射上报丢弃并记日志。
+
+**规则：**
+- MUST 实现 `GET /api/ping`（无鉴权，扩展测试连接用）。
+- MUST 实现 `POST /api/request`（采集脚本触发同步：`{domains, worker_ids}` → `{task_ids}`）。
+- MUST 实现 `GET /api/tasks?worker_id=xxx`（返回派给该采集者的待处理任务：`{tasks:[{task_id, worker, domains, status}]}`）。
+- MUST 实现 `POST /api/tasks/{task_id}/report`（扩展上报：`{cookies, worker_id, collected_at}`）。
+- MUST 实现 `POST /api/cookies`（扩展定时兜底/立即同步直接推送：`{domains, cookies, worker_id, collected_at}`）。
+- MUST 除 `/api/ping` 外所有接口校验 `X-API-Key`，密钥来自 `.env` 的 `COOKIE_SYNC_API_KEY`。
+- MUST 上报 cookie 脱敏，日志不得明文记录 cookie 值。
+- MUST 无映射的上报丢弃并记 WARN 日志，不写库。
+- MUST 上报 `worker_id` 与任务定向 worker 不一致时，以任务定向 worker 为准。
+
+**输入：**（见扩展契约 body 结构）
+
+| 字段 | 类型 | 必填 | 校验规则 |
+|---|---|---:|---|
+| X-API-Key | header | Yes | 必须等于 `COOKIE_SYNC_API_KEY` |
+| domains | string[] | Yes | 非空 |
+| worker_id | string | No | 空则归 `unknown` |
+| cookies | object[] | Yes | `chrome.cookies` 原生字段（name/value/domain/path/secure/httpOnly/expirationDate/sameSite） |
+| worker_ids | string[] | No | `/api/request` 定向采集者列表 |
+
+**输出 / 结果：**
+- 扩展可轮询、上报、直推；采集任务可完成"下发→上报→写库→复检"闭环。
+
+**验收标准：**
+- [ ] AC-001: Given 请求无 `X-API-Key` 或 key 错误, when 调用非 ping 接口, then 返回 401。
+- [ ] AC-002: Given 扩展上报无映射的域名, when 上报, then cookie 不写库并记 WARN 日志。
+- [ ] AC-003: Given 采集任务进入 `SYNCING`, when 扩展轮询, then 扩展能拿到定向任务并上报，平台写回旧表。
+
 ### AI 能力规格（每个 AI 功能必填）
 
 本产品当前版本不包含 AI 功能。
@@ -618,6 +824,9 @@
 | TaskRunLog | 运行日志 | `run_id`, `task_id`, `health_task_code`, `run_type`, `status`, `title` |
 | EnvCheckResult | 环境自检结果 | `check_key`, `check_name`, `status`, `message` |
 | LegacyCookieRecord | 旧 cookie 表记录 | `channel`, `shop_name`, `mobile_phone`, `DNS`, `cookie`, `headers`, `str_cookie`, `str_1`, `str_2`, `file` |
+| CookieSyncTask | 采集任务 | `cookie_sync_task_code`, `cookie_sync_task_name`, `cookie_table`, `channel`, `shop_name`, `mobile_phone`, `dns`, `check_url`, `http_method`, `http_headers`, `http_body`, `success_rule`, `failure_rule`, `cron_expression`, `sync_wait_timeout_seconds`, `status` |
+| CookieSyncMapping | 采集映射 | `worker_id`, `domain`, `channel`, `shop_name`, `mobile_phone`, `dns`, `remark` |
+| CookieSyncJob | 扩展采集任务队列 | `task_id`, `worker_id`, `domains`, `status`, `created_at`, `finished_at` |
 
 ### 6.2 实体关系
 
@@ -630,6 +839,9 @@
 | ScriptRun references ProfileRegistry | 一个运行实例锁定并占用一个目录 |
 | TaskRunLog references HealthTask/ScriptRun | 日志可挂接健康检测任务或脚本运行 |
 | HealthTask reads LegacyCookieRecord | 健康检测从旧 cookie 表读取凭证数据 |
+| CookieSyncTask reads/writes LegacyCookieRecord | 采集任务从旧表读 cookie 检测，采集成功后写回旧表 |
+| CookieSyncTask references CookieSyncMapping | 检测失败时按映射反查 `(worker_id, domain)` |
+| CookieSyncJob belongs to CookieSyncTask | 一次采集下发对应一个任务实例，定向派给某 worker |
 
 ### 6.3 数据规则
 
@@ -637,7 +849,10 @@
 - 创建健康检测任务时，修复配置可暂不绑定脚本/目录；启用自动修复时必须有可用脚本和可绑定目录。
 - 创建或上传的资源必须规划删除/停用路径；本版至少支持脚本启停、健康检测任务启停/删除、ScriptRun 取消，不允许只有新增没有停用。
 - 目录在脚本运行期间必须锁定，运行结束释放，避免并发使用。
-- 旧 cookie 表的主键和结构不由本系统修改，只按既有字段读写。
+- 旧 cookie 表的主键和结构不由本系统修改，只按既有字段读写；扩展采集写回采用先查后改，不依赖旧表唯一索引。
+- 扩展上报 cookie 写回旧表必须经映射表；无映射的上报丢弃并记 WARN 日志。
+- 扩展接口除 `/api/ping` 外必须校验 `X-API-Key`；密钥在 `.env` 的 `COOKIE_SYNC_API_KEY`。
+- 采集任务不绑定目录，无锁冲突。
 - 日志必须脱敏，不能明文记录 cookie、凭证或密码。
 
 ---
@@ -654,6 +869,8 @@
 | DEP-006 | APScheduler | 定时执行健康检测 | Yes | 扫描启用检测任务 |
 | DEP-007 | Chrome/Chromium | 浏览器执行环境 | Yes | 脚本可能需要 headed 模式 |
 | DEP-008 | 飞书机器人 Webhook | 失败/风控通知 | Yes | 检测失败与修复风控时推送提醒 |
+| DEP-009 | Chrome 扩展（Cookie 同步助手）+ 同事电脑浏览器 | 采集同事浏览器登录态 cookie | Yes | 扩展本体装在同事机器，平台仅实现接收端 API |
+| DEP-010 | 阿里云 RDS MySQL 写权限 | 扩展采集 cookie 写回 `ods_cookie_playwright` | Yes | 需 RDS 账号具备 UPDATE/INSERT 权限 |
 
 ---
 
@@ -662,7 +879,7 @@
 | 类别 | 要求 | 优先级 |
 |---|---|---|
 | 性能 | 单次健康检测请求默认超时 20 秒；列表页在常规数据量下应支持秒级加载 | P0 |
-| 安全 | 凭证加密存储；接口返回和日志输出必须脱敏；上传脚本必须校验后缀、大小、manifest 和路径穿越 | P0 |
+| 安全 | 凭证加密存储；接口返回和日志输出必须脱敏；上传脚本必须校验后缀、大小、manifest 和路径穿越；扩展接口除 `/api/ping` 外必须校验 `X-API-Key` | P0 |
 | 隐私 | 不在日志、页面和错误信息中泄露 cookie、密码、token 等敏感字段 | P0 |
 | 兼容性 | 第一版仅要求支持 Windows 部署节点；前端需支持桌面浏览器访问 | P0 |
 | 可靠性 | 脚本执行必须记录 stdout/stderr、result.json、运行状态；风控和失败必须可追踪和可恢复 | P0 |
@@ -692,6 +909,7 @@ MVP 完成条件：
 | ASM-002 | 第一版允许用户通过前端直接维护部署配置展示信息，但核心路径仍来自 `.env` | 开发文档给出 `.env` 与部署配置页面 | 若部署配置需要真正在线编辑并即时生效，需增加配置持久化和校验 |
 | ASM-003 | 调度范围仅覆盖启用的健康检测任务，按 cron 表达式触发检测与修复；未配置 cron 的任务每隔至少 5 分钟兜底执行一次 | 文档明确 APScheduler 负责扫描健康检测任务 | 若需要更复杂的调度（间隔、时段），调度模型需扩展 |
 | ASM-004 | 风控场景（短信、扫码、验证码、设备验证）只发送飞书提醒，不做人工修复工单闭环 | 用户已确认废弃人工修复模块 | 若未来需要人工接管流程，需重新引入工单与复检机制 |
+| ASM-005 | 同一同事同一域名的多店铺登录态本版不区分，一个 (worker_id, domain) 对应一条业务记录 | 用户确认"先不处理" | 若实际需区分，需引入 profile 级 worker 或采集标识，映射模型需扩展 |
 
 ### 10.2 待确认问题
 
@@ -700,7 +918,9 @@ MVP 完成条件：
 | Q-001 | 是否需要登录鉴权、用户账号体系和操作审计？ | Yes | 当前原型未体现权限边界 |
 | Q-002 | 健康检测任务是否需要批量导入/导出？ | No | 当前只覆盖页面手工维护，已支持克隆 |
 | Q-003 | 部署配置页面中的 `PUT /api/deploy/config` 是否真的允许修改运行配置，还是仅展示说明？ | Yes | 影响配置存储方式与运行时刷新机制 |
-| Q-004 | 旧 cookie 表的写回策略是否只允许脚本直接写库，还是也需要后端代写接口？ | Yes | 影响脚本协议和后端职责边界 |
+| Q-004 | ~~旧 cookie 表的写回策略是否只允许脚本直接写库，还是也需要后端代写接口？~~ 已定 | No | 已定：由平台后端代写（Cookie 扩展采集写回旧表） |
+| Q-006 | `ods_cookie_playwright` 是否有可依赖的更新键/时间戳字段，RDS 账号是否具备写权限？ | Yes | 影响写回实现与数据新鲜度标记 |
+| Q-007 | 同事电脑到平台 8081 的网络可达性、防火墙放行与 API Key 分发方案？ | Yes | 扩展需跨机器访问平台 |
 | Q-005 | 前端是否要支持更细的日志详情页、截图预览和 trace 下载？ | No | 当前原型仅展示列表和基础详情能力 |
 
 ---
