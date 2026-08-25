@@ -290,7 +290,7 @@
 **交付物**
 
 - 新增 cookie_sync 路由：`GET /api/ping`（无鉴权）、`POST /api/request`、`GET /api/tasks?worker_id=`、`POST /api/tasks/{id}/report`、`POST /api/cookies`
-- 新增 `X-API-Key` 鉴权依赖（非 ping 接口校验 `COOKIE_SYNC_API_KEY`）
+- 新增 `X-API-Key` 鉴权依赖（非 ping 接口校验 `COOKIE_SYNC_API_KEY`；key 留空关闭鉴权，仅限本地联调，生产必填）
 - 新增 `cookie_sync_service`：任务入队/定向匹配、上报按映射正向写库、无映射丢弃记 WARN、上报 worker 与定向不一致以定向为准
 - 注册路由到 `main.py`
 

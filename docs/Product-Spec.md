@@ -771,7 +771,7 @@
 实现 Chrome 扩展（Cookie 同步助手）契约的接收端接口，让同事电脑上的扩展可连接平台完成任务轮询与上报。
 
 **行为：**  
-平台提供扩展契约五条接口；校验 `X-API-Key`；接收上报 cookie 按映射写回旧表；无映射上报丢弃并记日志。
+平台提供扩展契约五条接口；校验 `X-API-Key`（`COOKIE_SYNC_API_KEY` 留空时关闭鉴权，仅限本地联调）；接收上报 cookie 按映射写回旧表；无映射上报丢弃并记日志。
 
 **规则：**
 - MUST 实现 `GET /api/ping`（无鉴权，扩展测试连接用）。
@@ -779,7 +779,8 @@
 - MUST 实现 `GET /api/tasks?worker_id=xxx`（返回派给该采集者的待处理任务：`{tasks:[{task_id, worker, domains, status}]}`）。
 - MUST 实现 `POST /api/tasks/{task_id}/report`（扩展上报：`{cookies, worker_id, collected_at}`）。
 - MUST 实现 `POST /api/cookies`（扩展定时兜底/立即同步直接推送：`{domains, cookies, worker_id, collected_at}`）。
-- MUST 除 `/api/ping` 外所有接口校验 `X-API-Key`，密钥来自 `.env` 的 `COOKIE_SYNC_API_KEY`。
+- MUST 除 `/api/ping` 外所有接口校验 `X-API-Key`（`COOKIE_SYNC_API_KEY` 留空时关闭鉴权，见下条），密钥来自 `.env`。
+- MUST `COOKIE_SYNC_API_KEY` 为空时关闭鉴权（仅限本地联调）；配置非空时所有非 ping 接口强制校验（生产必填）。
 - MUST 上报 cookie 脱敏，日志不得明文记录 cookie 值。
 - MUST 无映射的上报丢弃并记 WARN 日志，不写库。
 - MUST 上报 `worker_id` 与任务定向 worker 不一致时，以任务定向 worker 为准。
@@ -788,7 +789,7 @@
 
 | 字段 | 类型 | 必填 | 校验规则 |
 |---|---|---:|---|
-| X-API-Key | header | Yes | 必须等于 `COOKIE_SYNC_API_KEY` |
+| X-API-Key | header | 条件 | `COOKIE_SYNC_API_KEY` 非空时必填，必须等于其值；留空时关闭鉴权 |
 | domains | string[] | Yes | 非空 |
 | worker_id | string | No | 空则归 `unknown` |
 | cookies | object[] | Yes | `chrome.cookies` 原生字段（name/value/domain/path/secure/httpOnly/expirationDate/sameSite） |
@@ -798,7 +799,7 @@
 - 扩展可轮询、上报、直推；采集任务可完成"下发→上报→写库→复检"闭环。
 
 **验收标准：**
-- [ ] AC-001: Given 请求无 `X-API-Key` 或 key 错误, when 调用非 ping 接口, then 返回 401。
+- [ ] AC-001: Given `COOKIE_SYNC_API_KEY` 已配置, when 请求无或错 `X-API-Key`, then 非 ping 接口返回 401。
 - [ ] AC-002: Given 扩展上报无映射的域名, when 上报, then cookie 不写库并记 WARN 日志。
 - [ ] AC-003: Given 采集任务进入 `SYNCING`, when 扩展轮询, then 扩展能拿到定向任务并上报，平台写回旧表。
 
@@ -851,7 +852,7 @@
 - 目录在脚本运行期间必须锁定，运行结束释放，避免并发使用。
 - 旧 cookie 表的主键和结构不由本系统修改，只按既有字段读写；扩展采集写回采用先查后改，不依赖旧表唯一索引。
 - 扩展上报 cookie 写回旧表必须经映射表；无映射的上报丢弃并记 WARN 日志。
-- 扩展接口除 `/api/ping` 外必须校验 `X-API-Key`；密钥在 `.env` 的 `COOKIE_SYNC_API_KEY`。
+- 扩展接口除 `/api/ping` 外必须校验 `X-API-Key`（`COOKIE_SYNC_API_KEY` 留空时关闭鉴权，仅限本地联调）；密钥在 `.env`。
 - 采集任务不绑定目录，无锁冲突。
 - 日志必须脱敏，不能明文记录 cookie、凭证或密码。
 
@@ -879,7 +880,7 @@
 | 类别 | 要求 | 优先级 |
 |---|---|---|
 | 性能 | 单次健康检测请求默认超时 20 秒；列表页在常规数据量下应支持秒级加载 | P0 |
-| 安全 | 凭证加密存储；接口返回和日志输出必须脱敏；上传脚本必须校验后缀、大小、manifest 和路径穿越；扩展接口除 `/api/ping` 外必须校验 `X-API-Key` | P0 |
+| 安全 | 凭证加密存储；接口返回和日志输出必须脱敏；上传脚本必须校验后缀、大小、manifest 和路径穿越；扩展接口除 `/api/ping` 外必须校验 `X-API-Key`（`COOKIE_SYNC_API_KEY` 留空时关闭鉴权，仅限本地联调） | P0 |
 | 隐私 | 不在日志、页面和错误信息中泄露 cookie、密码、token 等敏感字段 | P0 |
 | 兼容性 | 第一版仅要求支持 Windows 部署节点；前端需支持桌面浏览器访问 | P0 |
 | 可靠性 | 脚本执行必须记录 stdout/stderr、result.json、运行状态；风控和失败必须可追踪和可恢复 | P0 |

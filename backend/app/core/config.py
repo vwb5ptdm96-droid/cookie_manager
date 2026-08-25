@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     txy_account: str = Field(default="", alias="TXY_ACCOUNT")
     txy_password: str = Field(default="", alias="TXY_PASSWORD")
     feishu_webhook_url: str = Field(default="", alias="FEISHU_WEBHOOK_URL")
+    cookie_sync_api_key: str = Field(default="", alias="COOKIE_SYNC_API_KEY")
 
     @field_validator("deploy_root", "runtime_root", mode="before")
     @classmethod
