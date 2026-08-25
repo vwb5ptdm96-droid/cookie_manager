@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api.routes.deploy import router as deploy_router
 from app.api.routes.environment import router as environment_router
 from app.api.routes.filesystem import router as filesystem_router
+from app.api.routes.cookie_sync import router as cookie_sync_router
 from app.api.routes.health_tasks import router as health_tasks_router
 from app.api.routes.profiles import router as profiles_router
 from app.api.routes.health import router as health_router
@@ -47,6 +48,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
 app.state.runtime_root = settings.runtime_root
 load_models()
+app.include_router(cookie_sync_router, prefix="/api")
 app.include_router(health_router, prefix="/api")
 app.include_router(environment_router, prefix="/api")
 app.include_router(deploy_router, prefix="/api")

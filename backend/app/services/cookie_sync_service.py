@@ -100,6 +100,9 @@ class CookieSyncService:
                 stmt = stmt.where(
                     or_(CookieSyncJob.worker_id == worker_id, CookieSyncJob.worker_id.is_(None))
                 )
+            else:
+                # 未指定采集者时只返回广播任务，不暴露其他采集者的定向任务
+                stmt = stmt.where(CookieSyncJob.worker_id.is_(None))
             rows = session.execute(stmt.order_by(CookieSyncJob.created_at)).scalars().all()
         return [self._serialize_job(j) for j in rows]
 

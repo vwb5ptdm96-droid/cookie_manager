@@ -105,7 +105,8 @@ def test_list_pending_tasks_directed_and_broadcast(tmp_path: Path) -> None:
     tasks_a = service.list_pending_tasks("同事A")
 
     assert {t["worker"] for t in tasks_a} == {"同事A", "any"}  # 定向 + 广播，不含同事B
-    assert len(service.list_pending_tasks()) == 3  # 不传 worker 返回全部
+    # 未指定采集者时只返回广播任务，不暴露其他采集者的定向任务
+    assert [t["worker"] for t in service.list_pending_tasks()] == ["any"]
 
 
 def test_handle_report_writes_via_mapping_and_marks_done(tmp_path: Path) -> None:

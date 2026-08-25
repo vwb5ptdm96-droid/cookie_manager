@@ -78,8 +78,12 @@ def ensure_runtime_dirs() -> None:
         (settings.runtime_root / sub).mkdir(parents=True, exist_ok=True)
 
 
+@lru_cache(maxsize=1)
 def create_mysql_engine():
-    """创建连接云端 MySQL 的 engine（用于 ods cookie 表等查询）。"""
+    """创建连接云端 MySQL 的 engine（用于 ods cookie 表等查询）。
+
+    缓存单例，避免扩展高频轮询时每请求新建连接池。
+    """
     settings = get_settings()
     if not settings.mysql_host or not settings.mysql_user:
         return None
