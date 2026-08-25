@@ -1,0 +1,24 @@
+{
+  "name": "session-maintenance-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@element-plus/icons-vue": "^2.3.2",
+    "element-plus": "2.14.2",
+    "pinia": "^3.0.3",
+    "vue": "3.5.39",
+    "vue-router": "^4.6.3"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.1",
+    "typescript": "^5.9.2",
+    "vite": "8.1.0",
+    "vue-tsc": "^3.0.7"
+  }
+}
