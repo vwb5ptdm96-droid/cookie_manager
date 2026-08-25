@@ -1,3 +1,5 @@
+# cookie_manager — 管理 cookie 平台
+
 # Windows 原生 Session 维护任务系统
 
 内部运维工作台，用于管理会话维护任务、健康检查、脚本库、Profile、人工修复工单、环境自检和运行日志。
