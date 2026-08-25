@@ -25,7 +25,6 @@ def test_phase3_routes_create_profile_and_upload_script(tmp_path: Path) -> None:
                 "/api/profiles",
                 json={
                     "profile_key": "profile_001",
-                    "task_id": None,
                     "relative_path": "profiles/ks/demo-user",
                 },
             )
@@ -44,7 +43,6 @@ def test_phase3_routes_create_profile_and_upload_script(tmp_path: Path) -> None:
             list_response = client.get("/api/scripts")
 
         assert profile_response.status_code == 200
-        assert profile_response.json()["data"]["task_id"] is None
         assert profile_response.json()["data"]["absolute_path"].endswith("runtime\\profiles\\ks\\demo-user")
         assert script_response.status_code == 200
         assert script_response.json()["data"]["script_code"] == "maintain_ks"

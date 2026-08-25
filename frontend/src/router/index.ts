@@ -1,44 +1,16 @@
 import { createRouter, createWebHistory } from "vue-router";
 
-import DashboardView from "@/views/DashboardView.vue";
 import DeployView from "@/views/DeployView.vue";
 import EnvironmentView from "@/views/EnvironmentView.vue";
-import HealthChecksView from "@/views/HealthChecksView.vue";
 import HealthTasksView from "@/views/HealthTasksView.vue";
 import LogsView from "@/views/LogsView.vue";
 import PlaceholderView from "@/views/PlaceholderView.vue";
 import ProfilesView from "@/views/ProfilesView.vue";
-import RepairsView from "@/views/RepairsView.vue";
 import ScriptRunsView from "@/views/ScriptRunsView.vue";
 import ScriptsView from "@/views/ScriptsView.vue";
-import SessionTasksView from "@/views/SessionTasksView.vue";
 
 const routes = [
-  { path: "/", redirect: "/dashboard" },
-  {
-    path: "/dashboard",
-    component: DashboardView,
-    meta: {
-      title: "总览",
-      description: "查看系统当前状态、最近日志、最近健康检测，并直接触发全局高频动作。",
-    },
-  },
-  {
-    path: "/tasks",
-    component: SessionTasksView,
-    meta: {
-      title: "维护任务",
-      description: "创建维护任务、查看绑定信息、手动执行脚本，并在风险场景下直达人工修复。",
-    },
-  },
-  {
-    path: "/checks",
-    component: HealthChecksView,
-    meta: {
-      title: "健康检测（旧）",
-      description: "旧版健康检测页面，即将迁移到健康检测任务。",
-    },
-  },
+  { path: "/", redirect: "/health-tasks" },
   {
     path: "/health-tasks",
     component: HealthTasksView,
@@ -52,7 +24,7 @@ const routes = [
     component: ProfilesView,
     meta: {
       title: "Profile 目录",
-      description: "登记、锁定、解锁和复检浏览器 Profile，并在需要时直接打开修复浏览器。",
+      description: "登记、锁定、解锁和复检浏览器 Profile。",
     },
   },
   {
@@ -69,14 +41,6 @@ const routes = [
     meta: {
       title: "脚本运行",
       description: "查看所有脚本执行实例，支持暂停、继续和取消正在执行的脚本。",
-    },
-  },
-  {
-    path: "/repairs",
-    component: RepairsView,
-    meta: {
-      title: "人工修复",
-      description: "处理 RISK 工单，在部署机打开修复浏览器，并在完成人工验证后发起复检。",
     },
   },
   {

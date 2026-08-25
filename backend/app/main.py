@@ -6,18 +6,14 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api.routes.dashboard import router as dashboard_router
 from app.api.routes.deploy import router as deploy_router
 from app.api.routes.environment import router as environment_router
 from app.api.routes.filesystem import router as filesystem_router
 from app.api.routes.health_tasks import router as health_tasks_router
 from app.api.routes.profiles import router as profiles_router
 from app.api.routes.health import router as health_router
-from app.api.routes.health_checks import router as health_checks_router
 from app.api.routes.logs import router as logs_router
-from app.api.routes.repairs import router as repairs_router
 from app.api.routes.script_runs import router as script_runs_router
-from app.api.routes.session_tasks import router as session_tasks_router
 from app.api.routes.scripts import router as scripts_router
 from app.api.deps import get_engine
 from app.core.config import get_settings
@@ -51,18 +47,14 @@ app = FastAPI(title=settings.app_name, lifespan=lifespan)
 app.state.runtime_root = settings.runtime_root
 load_models()
 app.include_router(health_router, prefix="/api")
-app.include_router(health_checks_router, prefix="/api")
-app.include_router(dashboard_router, prefix="/api")
 app.include_router(environment_router, prefix="/api")
 app.include_router(deploy_router, prefix="/api")
 app.include_router(health_tasks_router, prefix="/api")
 app.include_router(logs_router, prefix="/api")
 app.include_router(profiles_router, prefix="/api")
 app.include_router(filesystem_router, prefix="/api")
-app.include_router(repairs_router, prefix="/api")
 app.include_router(script_runs_router, prefix="/api")
 app.include_router(scripts_router, prefix="/api")
-app.include_router(session_tasks_router, prefix="/api")
 
 
 @app.exception_handler(AppError)

@@ -6,11 +6,10 @@ def test_metadata_contains_expected_tables() -> None:
     load_models()
 
     expected_tables = {
-        "session_maintenance_task",
-        "health_check_config",
+        "health_task",
+        "script_run",
         "script_registry",
         "profile_registry",
-        "manual_repair_ticket",
         "task_run_log",
         "env_check_result",
     }

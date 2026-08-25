@@ -10,13 +10,11 @@ from sqlalchemy.orm import Session
 from app.core.errors import AppError
 from app.core.path_utils import PathSecurityError, resolve_runtime_path
 from app.models.profile_registry import ProfileRegistry
-from app.models.session_task import SessionMaintenanceTask
 
 
 @dataclass(frozen=True)
 class ProfilePayload:
     profile_key: str
-    task_id: int | None
     relative_path: str
     note: str | None = None
 
@@ -38,8 +36,6 @@ class ProfileService:
         status = "READY"
 
         with Session(self.engine) as session:
-            if payload.task_id is not None:
-                self._get_task_by_id(session, payload.task_id)
             row = session.execute(
                 select(ProfileRegistry).where(ProfileRegistry.profile_key == payload.profile_key)
             ).scalar_one_or_none()
@@ -47,7 +43,6 @@ class ProfileService:
             if row is None:
                 row = ProfileRegistry(
                     profile_key=payload.profile_key,
-                    task_id=payload.task_id,
                     relative_path=relative_path,
                     note=payload.note,
                     status=status,
@@ -55,7 +50,6 @@ class ProfileService:
                 )
                 session.add(row)
             else:
-                row.task_id = payload.task_id
                 row.relative_path = relative_path
                 row.note = payload.note
                 row.status = status
@@ -111,13 +105,11 @@ class ProfileService:
             return self._serialize(row)
 
     def update(self, profile_key: str, payload: ProfilePayload) -> dict[str, object]:
-        """更新 profile_key、路径、绑定任务等字段。"""
+        """更新 profile_key、路径等字段。"""
         relative_path = self._normalize_profile_relative_path(payload.relative_path)
         absolute_path = self._resolve_profile_path(relative_path)
 
         with Session(self.engine) as session:
-            if payload.task_id is not None:
-                self._get_task_by_id(session, payload.task_id)
             row = self._get_by_key(session, profile_key)
 
             # 如果 profile_key 变了，检查新 key 是否已存在
@@ -129,7 +121,6 @@ class ProfileService:
                     raise AppError(f"Profile Key「{payload.profile_key}」已被使用", "DUPLICATE_PROFILE_KEY")
 
             row.profile_key = payload.profile_key
-            row.task_id = payload.task_id
             row.relative_path = relative_path
             row.note = payload.note
             row.last_verified_at = datetime.now() if absolute_path.exists() else row.last_verified_at
@@ -152,12 +143,6 @@ class ProfileService:
         ).scalar_one_or_none()
         if row is None:
             raise AppError("Profile 不存在", "PROFILE_NOT_FOUND", status_code=404)
-        return row
-
-    def _get_task_by_id(self, session: Session, task_id: int) -> SessionMaintenanceTask:
-        row = session.execute(select(SessionMaintenanceTask).where(SessionMaintenanceTask.id == task_id)).scalar_one_or_none()
-        if row is None:
-            raise AppError("绑定任务不存在", "TASK_NOT_FOUND", status_code=404)
         return row
 
     def _normalize_profile_relative_path(self, relative_path: str) -> str:
@@ -186,7 +171,6 @@ class ProfileService:
         return {
             "id": row.id,
             "profile_key": row.profile_key,
-            "task_id": row.task_id,
             "relative_path": row.relative_path,
             "absolute_path": str(self._resolve_profile_path(row.relative_path)),
             "status": row.status,

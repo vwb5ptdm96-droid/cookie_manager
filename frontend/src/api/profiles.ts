@@ -3,7 +3,6 @@ import { apiRequest } from "@/api/http";
 export interface ProfileItem {
   id: number;
   profile_key: string;
-  task_id: number | null;
   relative_path: string;
   absolute_path: string;
   status: string;
@@ -20,7 +19,6 @@ interface ProfileListResponse {
 
 export interface ProfileUpsertPayload {
   profile_key: string;
-  task_id: number | null;
   relative_path: string;
   note: string;
 }

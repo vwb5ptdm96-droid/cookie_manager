@@ -9,9 +9,6 @@ function navigateWithFlag(path: string, flag: string) {
 export function useGlobalQuickActions() {
   return {
     openEnvironmentChecks: navigateWithFlag("/environment", "autorun"),
-    runAllHealthChecks: navigateWithFlag("/checks", "runAll"),
-    openTaskCreate: navigateWithFlag("/tasks", "create"),
-    openCheckCreate: navigateWithFlag("/checks", "create"),
     openScriptUpload: navigateWithFlag("/scripts", "upload"),
   };
 }

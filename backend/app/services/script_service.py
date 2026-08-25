@@ -52,7 +52,7 @@ class ScriptService:
             content=content,
         )
 
-        script_dir = "scripts"
+        script_dir = f"scripts/uploaded/{script_code}/{version}"
         absolute_dir = resolve_runtime_path(self.runtime_root, script_dir)
         absolute_dir.mkdir(parents=True, exist_ok=True)
         (absolute_dir / main_file).write_bytes(content)

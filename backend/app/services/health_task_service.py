@@ -664,10 +664,23 @@ class HealthTaskService:
                 row_ref.status = "PASS"
             elif status == "RISK":
                 row_ref.status = "PENDING"
-                row_ref.last_result_message = (
-                    result.get("message", result.get("risk_type", "RISK"))
-                )
-                # TODO: 创建 RepairTicket
+                risk_message = result.get("message", result.get("risk_type", "RISK"))
+                row_ref.last_result_message = risk_message
+                # 风控只发飞书提醒，不创建人工修复工单
+                try:
+                    send_feishu_notification(
+                        title=f"修复遇风控: {row_ref.health_task_name or health_task_code}",
+                        message=risk_message,
+                        fields={
+                            "任务编码": health_task_code,
+                            "脚本": sr.script_code or "",
+                            "启动目录": sr.directory_key or "",
+                            "运行实例": run_id,
+                            "结果信息": risk_message,
+                        },
+                    )
+                except Exception:
+                    logger.exception("发送风控飞书通知异常 [%s]", health_task_code)
             else:
                 row_ref.status = "FAIL"
 

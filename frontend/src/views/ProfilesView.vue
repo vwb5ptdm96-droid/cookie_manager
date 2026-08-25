@@ -99,7 +99,7 @@ onMounted(loadProfiles);
       <div class="table-shell">
         <el-table v-loading="loading" :data="profiles" row-key="profile_key" empty-text="暂无登记 Profile。点击「登记 Profile」添加一条记录。">
           <el-table-column prop="profile_key" label="Profile Key" min-width="160" />
-          <el-table-column label="绑定任务" min-width="200">
+          <el-table-column label="绑定脚本" min-width="200">
             <template #default="{ row }">
               <div class="bound-tasks">
                 <template v-if="findBoundScripts(row).length > 0">

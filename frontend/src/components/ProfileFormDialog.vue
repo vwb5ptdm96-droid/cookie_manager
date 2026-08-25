@@ -21,7 +21,6 @@ const emit = defineEmits<{
 const formRef = ref<FormInstance>();
 const form = reactive<ProfileUpsertPayload>({
   profile_key: "",
-  task_id: null,
   relative_path: "",
   note: "",
 });
@@ -71,14 +70,12 @@ watch(
   (opened) => {
     if (opened && props.profile) {
       form.profile_key = props.profile.profile_key;
-      form.task_id = props.profile.task_id;
       form.relative_path = props.profile.relative_path;
       form.note = props.profile.note || "";
       initSelections();
     }
     if (!opened) {
       form.profile_key = "";
-      form.task_id = null;
       form.relative_path = "";
       form.note = "";
       selectedScriptCodes.value = [];
@@ -91,7 +88,6 @@ watch(
   (profile) => {
     if (profile && props.modelValue) {
       form.profile_key = profile.profile_key;
-      form.task_id = profile.task_id;
       form.relative_path = profile.relative_path;
       form.note = profile.note || "";
       initSelections();
@@ -128,7 +124,7 @@ async function handleSubmit(): Promise<void> {
       <el-form-item label="Profile Key" prop="profile_key">
         <el-input v-model="form.profile_key" placeholder="例如 profile_ks_demo01" />
       </el-form-item>
-      <el-form-item label="绑定任务">
+      <el-form-item label="绑定脚本">
         <el-select v-model="selectedScriptCodes" multiple placeholder="选择要绑定的脚本" collapse-tags>
           <el-option
             v-for="script in props.scripts"

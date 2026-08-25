@@ -7,12 +7,10 @@ import QuickActionBar from "@/components/QuickActionBar.vue";
 const route = useRoute();
 
 const items = [
-  { label: "总览", path: "/dashboard" },
   { label: "健康检测任务", path: "/health-tasks" },
   { label: "脚本库", path: "/scripts" },
   { label: "目录库", path: "/profiles" },
   { label: "脚本运行", path: "/script-runs" },
-  { label: "人工修复", path: "/repairs" },
   { label: "运行日志", path: "/logs" },
   { label: "环境自检", path: "/environment" },
   { label: "部署配置", path: "/deploy" },
