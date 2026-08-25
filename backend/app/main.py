@@ -16,7 +16,7 @@ from app.api.routes.logs import router as logs_router
 from app.api.routes.script_runs import router as script_runs_router
 from app.api.routes.scripts import router as scripts_router
 from app.api.deps import get_engine
-from app.core.config import get_settings
+from app.core.config import ensure_runtime_dirs, get_settings
 from app.core.errors import AppError
 from app.core.response import error_response
 from app.models import load_models
@@ -32,6 +32,7 @@ async def lifespan(app: FastAPI):
         yield
         return
 
+    ensure_runtime_dirs()
     scheduler = HealthTaskScheduler(engine=get_engine(), runtime_root=settings.runtime_root)
     scheduler.start()
     app.state.scheduler_service = scheduler

@@ -24,8 +24,12 @@
 
 ### 2. 安装 Python 依赖
 
+在 `backend/` 下建虚拟环境（`start_backend.bat` 会自动检测 `backend\.venv`）：
+
 ```bash
-pip install -r backend/requirements.txt
+cd backend
+python -m venv .venv
+.\.venv\Scripts\pip install -r requirements.txt
 ```
 
 ### 3. 安装 Playwright 浏览器内核
@@ -48,24 +52,36 @@ mkdir -p runtime/profiles/moren-chrome
 
 ### 5. 配置环境变量
 
-`.env` 已在项目根目录，确认以下项：
+复制 `.env.example` 为 `.env`（`.env` 不进 git，每台机器单独配）。**路径项不需要配**，代码自动检测项目根目录；只需按实际环境填外部依赖：
 
-- `DEPLOY_ROOT` — 指向项目根目录（默认自动检测，通常不用改）
-- `RUNTIME_ROOT` — 指向 `runtime/` 目录
-- `MYSQL_HOST` / `MYSQL_PORT` / `MYSQL_USER` / `MYSQL_PASSWORD` — RDS 可达即可
-- `TXY_ACCOUNT` / `TXY_PASSWORD` — 淘宝登录凭证
+- `MYSQL_HOST` / `MYSQL_PORT` / `MYSQL_USER` / `MYSQL_PASSWORD` / `MYSQL_DATABASE` — RDS 可达即可
+- `TXY_ACCOUNT` / `TXY_PASSWORD` — 天巡云登录凭证
+- `FEISHU_WEBHOOK_URL` — 飞书机器人通知地址
+
+> `DEPLOY_ROOT` / `RUNTIME_ROOT` / `DATABASE_URL` 均可不配：默认分别指向项目根目录、`runtime/`、`runtime/session_maintenance.db`。如需自定义，写**相对项目根目录**的相对路径即可，例如 `RUNTIME_ROOT=runtime`。
 
 ### 6. 防火墙放行端口
 
+端口以 `.env` 的 `APP_PORT` 为准（默认 8081），放行该端口：
+
 ```bash
-netsh advfirewall firewall add rule name="Session Maintenance 8399" dir=in protocol=tcp localport=8399 action=allow
+netsh advfirewall firewall add rule name="Session Maintenance 8081" dir=in protocol=tcp localport=8081 action=allow
 ```
 
 ### 7. 启动服务
 
+推荐直接用根目录脚本（自动检测 `backend\.venv` 并先跑迁移）：
+
+```bash
+.\start_backend.bat
+```
+
+手动启动：
+
 ```bash
 cd backend
-uvicorn app.main:app --port 8399 --host 0.0.0.0
+.\.venv\Scripts\python.exe -m alembic -c alembic.ini upgrade head
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8081
 ```
 
 ### 8. 验证

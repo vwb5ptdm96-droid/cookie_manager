@@ -5,7 +5,7 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-from app.core.config import DEFAULT_RUNTIME_ROOT, get_settings
+from app.core.config import DEFAULT_RUNTIME_ROOT, ensure_runtime_dirs, get_settings
 from app.core.database import Base
 from app.models import load_models
 
@@ -16,6 +16,7 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 load_models()
+ensure_runtime_dirs()
 target_metadata = Base.metadata
 
 

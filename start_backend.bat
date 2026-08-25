@@ -15,7 +15,9 @@ if not defined APP_PORT set "APP_PORT=8080"
 if not defined DEPLOY_ROOT set "DEPLOY_ROOT=%ROOT_DIR:~0,-1%"
 if not defined RUNTIME_ROOT set "RUNTIME_ROOT=%ROOT_DIR%runtime"
 
-if exist ".venv\Scripts\python.exe" (
+if exist "%ROOT_DIR%backend\.venv\Scripts\python.exe" (
+    set "PYTHON_EXE=%ROOT_DIR%backend\.venv\Scripts\python.exe"
+) else if exist "%ROOT_DIR%.venv\Scripts\python.exe" (
     set "PYTHON_EXE=%ROOT_DIR%.venv\Scripts\python.exe"
 ) else (
     set "PYTHON_EXE=python"
