@@ -361,7 +361,7 @@ class CookieSyncTaskService:
 
         返回 (是否通过, 结论消息, 响应体预览)。失败时不会写库，由调用方决定后续动作。
         """
-        add_step(f"目标: {row.http_method} {self._mask_sensitive(row.check_url or '')}")
+        add_step(f"目标: {row.http_method} {self._mask_url(row.check_url or '')}")
 
         cookie_headers: dict[str, str] = {}
         try:
@@ -491,7 +491,7 @@ class CookieSyncTaskService:
                 message=message,
                 fields={
                     "任务编码": row.cookie_sync_task_code,
-                    "检测 URL": self._mask_sensitive(row.check_url or ""),
+                    "检测 URL": self._mask_url(row.check_url or ""),
                     "请求方法": row.http_method or "",
                     "结果信息": message,
                     "响应体预览": response_preview,
@@ -529,6 +529,22 @@ class CookieSyncTaskService:
         http_method = payload.get("http_method")
         if http_method is not None and http_method not in ALLOWED_METHODS:
             raise AppError(f"不支持的请求方法: {http_method}", "INVALID_PAYLOAD")
+
+    @staticmethod
+    def _mask_url(url: str) -> str:
+        """脱敏 URL query 中的敏感参数（token/api_key/sign/secret 等）。
+
+        `_mask_sensitive` 只命中 JSON 键形式（"token": "v"），对裸 URL query
+        （?token=xxx）无效，此处单独处理（Spec §8 隐私 P0）。
+        """
+        if not url:
+            return url
+        return re.sub(
+            r"(?i)([?&](?:token|access_token|refresh_token|api[_-]?key|sign|secret|"
+            r"password|authorization|captcha|sms[_-]?code|verify[_-]?code)=)[^&]*",
+            r"\1***",
+            url,
+        )
 
     @staticmethod
     def _mask_sensitive(text: str) -> str:

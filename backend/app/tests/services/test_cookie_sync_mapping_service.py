@@ -56,6 +56,22 @@ def test_create_mapping_dns_must_match_domain(tmp_path: Path) -> None:
     assert "一致" in exc.value.message
 
 
+def test_create_mapping_dns_normalized_to_lowercase(tmp_path: Path) -> None:
+    """dns 存储统一小写，与 domain 对称，避免大小写敏感库下反查失配。"""
+    service, _ = _make_service(tmp_path)
+
+    created = service.create_mapping(
+        {
+            "worker_id": "同事A",
+            "domain": "Store.WeiXin.QQ.com",
+            "channel": "WEIXIN",
+            "dns": "Store.WeiXin.QQ.com",
+        }
+    )
+    assert created["domain"] == "store.weixin.qq.com"
+    assert created["dns"] == "store.weixin.qq.com"
+
+
 def test_create_mapping_leading_dot_domain_still_matches_dns(tmp_path: Path) -> None:
     """带前导点的 domain 归一化后与 dns 一致，允许创建（domain 保留前导点以便匹配 Chrome cookie）。"""
     service, _ = _make_service(tmp_path)

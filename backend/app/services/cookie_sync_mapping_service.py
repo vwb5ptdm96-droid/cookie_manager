@@ -41,7 +41,7 @@ class CookieSyncMappingService:
             channel=payload["channel"].strip().upper(),
             shop_name=payload.get("shop_name"),
             mobile_phone=payload.get("mobile_phone"),
-            dns=payload["dns"].strip(),
+            dns=payload["dns"].strip().lower(),
             remark=payload.get("remark"),
         )
         try:
@@ -78,6 +78,7 @@ class CookieSyncMappingService:
                     setattr(row, field, value.strip() if isinstance(value, str) else value)
             row.domain = (row.domain or "").strip().lower()
             row.channel = (row.channel or "").strip().upper()
+            row.dns = (row.dns or "").strip().lower()
             # 更新后 dns 与 domain 仍需一致
             normalized_domain = row.domain.strip().lower().lstrip(".")
             normalized_dns = (row.dns or "").strip().lower().lstrip(".")

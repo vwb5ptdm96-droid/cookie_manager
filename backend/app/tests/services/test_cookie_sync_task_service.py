@@ -124,6 +124,18 @@ def _get_latest_job(engine) -> CookieSyncJob | None:
         return session.query(CookieSyncJob).order_by(CookieSyncJob.id.desc()).first()
 
 
+def test_mask_url_redacts_query_token(tmp_path: Path, monkeypatch) -> None:
+    """复审遗留：裸 URL query 的 token/api_key 等必须脱敏（_mask_sensitive 对裸 URL 无效）。"""
+    service, _, _ = _make_service(tmp_path, monkeypatch, fake_http_status=200)
+
+    masked = service._mask_url("https://x.com/check?token=abc123secret&page=1")
+    assert masked == "https://x.com/check?token=***&page=1"
+    masked2 = service._mask_url("https://x.com/check?api_key=XYZ&sign=abc")
+    assert "XYZ" not in masked2 and "abc" not in masked2
+    # 无关参数不误伤
+    assert "page=1" in masked
+
+
 def test_create_task_success(tmp_path: Path, monkeypatch) -> None:
     service, _, _ = _make_service(tmp_path, monkeypatch)
 
