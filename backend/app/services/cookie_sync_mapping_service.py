@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import Engine, select
+from sqlalchemy import Engine, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -78,6 +78,14 @@ class CookieSyncMappingService:
                     setattr(row, field, value.strip() if isinstance(value, str) else value)
             row.domain = (row.domain or "").strip().lower()
             row.channel = (row.channel or "").strip().upper()
+            # 更新后 dns 与 domain 仍需一致
+            normalized_domain = row.domain.strip().lower().lstrip(".")
+            normalized_dns = (row.dns or "").strip().lower().lstrip(".")
+            if normalized_domain and normalized_dns and normalized_domain != normalized_dns:
+                raise AppError(
+                    f"dns 应与 domain 一致: domain={normalized_domain} dns={normalized_dns}",
+                    "INVALID_PAYLOAD",
+                )
             try:
                 session.commit()
             except IntegrityError:
@@ -92,13 +100,13 @@ class CookieSyncMappingService:
     def delete_mapping(self, mapping_id: int) -> None:
         with Session(self.engine) as session:
             row = self._get_row(session, mapping_id)
-            # Spec REQ-008：删除前检查是否有采集任务依赖该业务记录
+            # Spec REQ-008：删除前检查是否有采集任务依赖该业务记录。
+            # 与 _find_mapping 的 channel+dns 反查对齐：只要存在启用的采集任务按
+            # channel+dns 能命中该映射（精确或 fallback），就构成依赖，阻止删除。
             dependent = session.execute(
                 select(CookieSyncTask.id).where(
-                    CookieSyncTask.channel == row.channel,
+                    func.upper(CookieSyncTask.channel) == row.channel.upper(),
                     CookieSyncTask.dns == row.dns,
-                    ((CookieSyncTask.shop_name == row.shop_name) | (CookieSyncTask.shop_name.is_(None))),
-                    ((CookieSyncTask.mobile_phone == row.mobile_phone) | (CookieSyncTask.mobile_phone.is_(None))),
                     CookieSyncTask.enabled.is_(True),
                 )
             ).scalars().first()
@@ -124,6 +132,14 @@ class CookieSyncMappingService:
             for field in ("worker_id", "domain", "channel", "dns"):
                 if not payload.get(field):
                     raise AppError(f"{field} 不能为空", "INVALID_PAYLOAD")
+            # Spec REQ-008 输入表：dns 应与 domain 一致（归一化去前导点后比较）
+            domain = (payload.get("domain") or "").strip().lower().lstrip(".")
+            dns = (payload.get("dns") or "").strip().lower().lstrip(".")
+            if domain and dns and domain != dns:
+                raise AppError(
+                    f"dns 应与 domain 一致: domain={domain} dns={dns}",
+                    "INVALID_PAYLOAD",
+                )
 
     def _serialize(self, row: CookieSyncMapping) -> dict[str, object]:
         return {

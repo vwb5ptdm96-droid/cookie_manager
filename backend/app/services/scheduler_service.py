@@ -135,8 +135,9 @@ class HealthTaskScheduler:
 
         for row in syncing_rows:
             jobs = jobs_by_source.get(row.id, [])
-            latest = jobs[0] if jobs else None
-            if latest is not None and latest.status == "done":
+            # MAJOR-4：优先取任一已完成的 job 复检，避免新建 pending job 盖过旧 done job 导致卡死
+            done_job = next((j for j in jobs if j.status == "done"), None)
+            if done_job is not None:
                 try:
                     service.recheck_after_sync(row.id)
                 except Exception as exc:

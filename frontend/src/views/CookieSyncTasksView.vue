@@ -453,6 +453,12 @@ function openMappingEdit(mapping: CookieSyncMappingItem): void {
 }
 
 async function handleMappingSubmit(): Promise<void> {
+  // Spec REQ-008：dns 应与 domain 一致
+  const norm = (s: string | null | undefined) => (s ?? "").trim().toLowerCase().replace(/^\./, "");
+  if (mappingForm.domain && mappingForm.dns && norm(mappingForm.domain) !== norm(mappingForm.dns)) {
+    ElMessage.error("dns 应与 domain 一致");
+    return;
+  }
   mappingSubmitting.value = true;
   try {
     if (editingMapping.value) {

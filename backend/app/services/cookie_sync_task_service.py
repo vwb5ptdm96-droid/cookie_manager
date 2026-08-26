@@ -233,7 +233,7 @@ class CookieSyncTaskService:
                             worker_ids=[mapping.worker_id],
                             source_task_id=row.id,
                         )
-                    except SQLAlchemyError:
+                    except Exception:
                         session.rollback()
                         logger.exception("下发采集任务失败 code=%s", code)
                         row.status = "FAIL"
@@ -280,6 +280,12 @@ class CookieSyncTaskService:
 
         with self.session_factory() as session:
             row = self._get_row_by_id(session, task_id)
+            # MAJOR-4 守卫：仅 SYNCING 状态可复检，避免并发重复覆盖状态
+            if row.status != "SYNCING":
+                add_step("任务已不在 SYNCING 状态，跳过复检")
+                result = self._serialize(row)
+                result["check_detail"] = "\n".join(steps)
+                return result
             add_step("扩展已上报，开始复检")
             check_pass, check_message, response_preview = self._perform_check(
                 session, row, add_step
@@ -320,6 +326,12 @@ class CookieSyncTaskService:
 
         with self.session_factory() as session:
             row = self._get_row_by_id(session, task_id)
+            # MAJOR-4 守卫：仅 SYNCING 状态按超时处理，避免并发重复覆盖状态
+            if row.status != "SYNCING":
+                steps.append(f"[{beijing_now().strftime('%H:%M:%S')}] 任务已不在 SYNCING 状态，跳过超时处理")
+                result = self._serialize(row)
+                result["check_detail"] = "\n".join(steps)
+                return result
             steps.append(f"[{beijing_now().strftime('%H:%M:%S')}] 等待扩展上报超时，标记 FAIL")
             row.status = "FAIL"
             row.last_run_status = "FAIL"
@@ -349,7 +361,7 @@ class CookieSyncTaskService:
 
         返回 (是否通过, 结论消息, 响应体预览)。失败时不会写库，由调用方决定后续动作。
         """
-        add_step(f"目标: {row.http_method} {row.check_url}")
+        add_step(f"目标: {row.http_method} {self._mask_sensitive(row.check_url or '')}")
 
         cookie_headers: dict[str, str] = {}
         try:
@@ -448,9 +460,10 @@ class CookieSyncTaskService:
         """按业务键反查映射 (worker_id, domain)。
 
         优先精确匹配全部业务键；无命中时放宽到 channel + dns。
+        channel 大小写不敏感（映射入库时强制大写，任务侧统一比较大写）。
         """
         cond = (
-            (CookieSyncMapping.channel == row.channel)
+            (CookieSyncMapping.channel == row.channel.upper())
             & ((CookieSyncMapping.dns == row.dns) if row.dns else True)
         )
         if row.shop_name:
@@ -465,7 +478,7 @@ class CookieSyncTaskService:
         # 放宽：只要 channel + dns 命中即可（业务记录一般以 dns 为强定位）
         fallback = session.execute(
             select(CookieSyncMapping).where(
-                CookieSyncMapping.channel == row.channel,
+                CookieSyncMapping.channel == row.channel.upper(),
                 CookieSyncMapping.dns == row.dns,
             )
         ).scalars().first()
@@ -478,9 +491,8 @@ class CookieSyncTaskService:
                 message=message,
                 fields={
                     "任务编码": row.cookie_sync_task_code,
-                    "检测 URL": row.check_url or "",
+                    "检测 URL": self._mask_sensitive(row.check_url or ""),
                     "请求方法": row.http_method or "",
-                    "采集映射": "已下发等待上报" if row.status == "SYNCING" else "",
                     "结果信息": message,
                     "响应体预览": response_preview,
                 },

@@ -198,6 +198,10 @@ def test_full_loop_upload_then_recheck_passes(tmp_path: Path, monkeypatch) -> No
         worker_id="同事A",
     )
     assert report["stored"] == 1
+    # MAJOR-1：上报写回成功应记录采集任务最近同步时间
+    with Session(engine) as session:
+        row = session.query(CookieSyncTask).filter_by(id=task["id"]).one()
+        assert row.last_sync_at is not None
 
     # 上报完成，复检时 HTTP 恢复成功
     def fake_http_ok(**kwargs) -> dict[str, object]:
@@ -257,6 +261,29 @@ def test_sync_timeout_fails_and_notifies(tmp_path: Path, monkeypatch) -> None:
     assert result["status"] == "FAIL"
     assert "等待扩展上报超时" in result["last_result_message"]
     assert len(notifier.calls) == 1
+
+
+def test_recheck_and_timeout_skipped_when_not_syncing(tmp_path: Path, monkeypatch) -> None:
+    """MAJOR-4 守卫：非 SYNCING 状态下复检/超时处理应跳过，不覆盖任务状态。"""
+    service, engine, notifier = _make_service(tmp_path, monkeypatch, fake_http_status=500)
+
+    # 任务初始为 PENDING，直接调复检/超时 → 跳过
+    task = _create_task(service)
+    recheck = service.recheck_after_sync(task["id"])
+    assert recheck["status"] == "PENDING"
+    timeout = service.fail_on_timeout(task["id"])
+    assert timeout["status"] == "PENDING"
+    assert notifier.calls == []
+
+    # FAIL 状态下调复检 → 保持 FAIL 不被覆盖
+    _add_mapping(engine)
+    task2 = _create_task(service)
+    service.execute_check(task2["cookie_sync_task_code"])
+    assert service.get_task(task2["cookie_sync_task_code"])["status"] == "SYNCING"
+    service.fail_on_timeout(task2["id"])
+    recheck_again = service.recheck_after_sync(task2["id"])
+    assert recheck_again["status"] == "FAIL"  # 已非 SYNCING，跳过复检，保持 FAIL
+    assert len(notifier.calls) == 1  # 仅超时通知一次，复检跳过不再通知
 
 
 def test_update_toggle_clone_delete(tmp_path: Path, monkeypatch) -> None:

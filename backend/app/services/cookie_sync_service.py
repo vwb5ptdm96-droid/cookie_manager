@@ -13,6 +13,7 @@ from app.core.config import create_mysql_engine
 from app.core.errors import AppError
 from app.models.cookie_sync_job import CookieSyncJob
 from app.models.cookie_sync_mapping import CookieSyncMapping
+from app.models.cookie_sync_task import CookieSyncTask
 from app.services.legacy_cookie_service import LegacyCookieLookup, LegacyCookieService
 
 logger = logging.getLogger(__name__)
@@ -139,6 +140,13 @@ class CookieSyncService:
             stored = self._write_cookies_by_mapping(session, attribution, cookies)
             job.status = "done"
             job.finished_at = beijing_now()
+            # 采集写回成功且任务由采集任务发起时，记录该采集任务的最近同步时间
+            if stored > 0 and job.source_task_id is not None:
+                task = session.execute(
+                    select(CookieSyncTask).where(CookieSyncTask.id == job.source_task_id)
+                ).scalars().first()
+                if task is not None:
+                    task.last_sync_at = beijing_now()
             session.commit()
         return {"ok": True, "stored": stored, "worker_id": attribution}
 
