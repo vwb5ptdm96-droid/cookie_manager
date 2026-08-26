@@ -124,6 +124,11 @@ def _get_latest_job(engine) -> CookieSyncJob | None:
         return session.query(CookieSyncJob).order_by(CookieSyncJob.id.desc()).first()
 
 
+def _get_all_jobs(engine) -> list[CookieSyncJob]:
+    with Session(engine) as session:
+        return session.query(CookieSyncJob).all()
+
+
 def test_mask_url_redacts_query_token(tmp_path: Path, monkeypatch) -> None:
     """复审遗留：裸 URL query 的 token/api_key 等必须脱敏（_mask_sensitive 对裸 URL 无效）。"""
     service, _, _ = _make_service(tmp_path, monkeypatch, fake_http_status=200)
@@ -273,6 +278,67 @@ def test_sync_timeout_fails_and_notifies(tmp_path: Path, monkeypatch) -> None:
     assert result["status"] == "FAIL"
     assert "等待扩展上报超时" in result["last_result_message"]
     assert len(notifier.calls) == 1
+
+
+def test_execute_sync_repair_dispatches(tmp_path: Path, monkeypatch) -> None:
+    """AC-005：手动执行扩展采集 → 直接下发定向任务进入 SYNCING。"""
+    service, engine, notifier = _make_service(tmp_path, monkeypatch, fake_http_status=500)
+    _add_mapping(engine)
+    task = _create_task(service)
+
+    result = service.execute_sync_repair(task["cookie_sync_task_code"])
+
+    assert result["status"] == "SYNCING"
+    assert result["sync_deadline_at"] is not None
+    job = _get_latest_job(engine)
+    assert job is not None
+    assert job.worker_id == "同事A"
+    assert job.source_task_id == task["id"]
+    assert job.status == "pending"
+    assert notifier.calls == []  # 等待上报阶段不通知
+    assert "已下发采集任务" in result["check_detail"]
+
+
+def test_execute_sync_repair_no_mapping(tmp_path: Path, monkeypatch) -> None:
+    """AC-005：手动执行扩展采集无映射 → 明确报错，任务状态不变。"""
+    service, engine, notifier = _make_service(tmp_path, monkeypatch, fake_http_status=500)
+    task = _create_task(service)
+
+    with pytest.raises(AppError) as exc:
+        service.execute_sync_repair(task["cookie_sync_task_code"])
+
+    assert exc.value.error_code == "NO_MAPPING"
+    assert exc.value.status_code == 409
+    # 任务状态未被破坏（非检测失败，不标 FAIL）
+    assert service.get_task(task["cookie_sync_task_code"])["status"] == "PENDING"
+    assert _get_latest_job(engine) is None
+    assert notifier.calls == []
+
+
+def test_execute_sync_repair_disabled_task(tmp_path: Path, monkeypatch) -> None:
+    service, engine, _ = _make_service(tmp_path, monkeypatch, fake_http_status=500)
+    _add_mapping(engine)
+    task = _create_task(service)
+    service.toggle_task(task["cookie_sync_task_code"], enabled=False)
+
+    with pytest.raises(AppError) as exc:
+        service.execute_sync_repair(task["cookie_sync_task_code"])
+    assert exc.value.error_code == "TASK_DISABLED"
+
+
+def test_execute_sync_repair_skips_when_already_syncing(tmp_path: Path, monkeypatch) -> None:
+    """任务已在 SYNCING 时手动触发 → 跳过重复下发。"""
+    service, engine, _ = _make_service(tmp_path, monkeypatch, fake_http_status=500)
+    _add_mapping(engine)
+    task = _create_task(service)
+    service.execute_check(task["cookie_sync_task_code"])  # 检测失败进入 SYNCING
+    job_count_before = len(_get_all_jobs(engine))
+
+    result = service.execute_sync_repair(task["cookie_sync_task_code"])
+
+    assert result["status"] == "SYNCING"
+    assert len(_get_all_jobs(engine)) == job_count_before  # 未重复下发
+    assert "跳过重复触发" in result["check_detail"]
 
 
 def test_recheck_and_timeout_skipped_when_not_syncing(tmp_path: Path, monkeypatch) -> None:

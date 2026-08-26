@@ -139,6 +139,49 @@ def test_execute_check_via_api_fails_without_mapping(tmp_path: Path, monkeypatch
         app.dependency_overrides.clear()
 
 
+def test_execute_repair_via_api(tmp_path: Path, monkeypatch) -> None:
+    """AC-005：手动执行扩展采集接口。有映射 → SYNCING；无映射 → 409 NO_MAPPING。"""
+    _setup(tmp_path, monkeypatch)
+    try:
+        with TestClient(app) as client:
+            # 建映射 + 采集任务
+            client.post(
+                "/api/cookie-sync-mappings",
+                json={
+                    "worker_id": "同事A",
+                    "domain": "store.weixin.qq.com",
+                    "channel": "WEIXIN",
+                    "shop_name": "shop-a",
+                    "dns": "store.weixin.qq.com",
+                },
+            )
+            code = client.post("/api/cookie-sync-tasks", json=_create_payload()).json()["data"][
+                "cookie_sync_task_code"
+            ]
+
+            # 有映射 → 直接进入 SYNCING
+            r = client.post(f"/api/cookie-sync-tasks/{code}/repair")
+            assert r.status_code == 200
+            data = r.json()["data"]
+            assert data["status"] == "SYNCING"
+            assert "已下发采集任务" in data["check_detail"]
+
+            # 无映射任务 → 409 NO_MAPPING（不同业务键，不命中上面创建的映射）
+            no_map_code = client.post(
+                "/api/cookie-sync-tasks",
+                json=_create_payload(
+                    cookie_sync_task_name="无映射任务",
+                    channel="TAOBAO",
+                    dns="item.taobao.com",
+                ),
+            ).json()["data"]["cookie_sync_task_code"]
+            r2 = client.post(f"/api/cookie-sync-tasks/{no_map_code}/repair")
+            assert r2.status_code == 409
+            assert r2.json()["error_code"] == "NO_MAPPING"
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_execute_check_disabled_task_400(tmp_path: Path, monkeypatch) -> None:
     _setup(tmp_path, monkeypatch)
     try:

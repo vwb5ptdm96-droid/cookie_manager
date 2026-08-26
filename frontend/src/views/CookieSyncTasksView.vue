@@ -9,6 +9,7 @@ import {
   createCookieSyncTask,
   deleteCookieSyncTask,
   executeCookieSyncTaskCheck,
+  executeCookieSyncTaskRepair,
   fetchCookieSyncTasks,
   toggleCookieSyncTask,
   updateCookieSyncTask,
@@ -30,6 +31,7 @@ const tasks = ref<CookieSyncTaskItem[]>([]);
 const taskLoading = ref(false);
 const submitting = ref(false);
 const checkingCode = ref<string | null>(null);
+const repairingCode = ref<string | null>(null);
 const togglingCode = ref<string | null>(null);
 const taskDialogVisible = ref(false);
 const editingTask = ref<CookieSyncTaskItem | null>(null);
@@ -362,6 +364,29 @@ async function handleCheck(task: CookieSyncTaskItem): Promise<void> {
   }
 }
 
+async function handleRepair(task: CookieSyncTaskItem): Promise<void> {
+  repairingCode.value = task.cookie_sync_task_code;
+  try {
+    const result = await executeCookieSyncTaskRepair(task.cookie_sync_task_code);
+    const detail = (result as unknown as Record<string, string>).check_detail || "";
+    await loadTasks();
+    if (detail) {
+      await ElMessageBox.alert(detail, `执行修复结果: ${statusLabel(result.status)}`, {
+        confirmButtonText: "确定",
+        dangerouslyUseHTMLString: false,
+        message: detail,
+        customClass: "check-result-dialog",
+      });
+    } else {
+      ElMessage.success(`已触发扩展采集，状态：${statusLabel(result.status)}`);
+    }
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "执行修复失败");
+  } finally {
+    repairingCode.value = null;
+  }
+}
+
 async function handleClone(task: CookieSyncTaskItem): Promise<void> {
   try {
     await cloneCookieSyncTask(task.cookie_sync_task_code);
@@ -405,7 +430,8 @@ async function handleToggle(task: CookieSyncTaskItem): Promise<void> {
 }
 
 function handleTaskAction(cmd: string, task: CookieSyncTaskItem): void {
-  if (cmd === "clone") void handleClone(task);
+  if (cmd === "repair") void handleRepair(task);
+  else if (cmd === "clone") void handleClone(task);
   else if (cmd === "delete") void handleDelete(task);
   else if (cmd === "toggle") void handleToggle(task);
 }
@@ -558,10 +584,16 @@ onMounted(() => {
                   <span class="cell-muted">{{ formatBeijingTime(row.last_sync_at) || "-" }}</span>
                 </template>
               </el-table-column>
-              <el-table-column label="操作" width="230" fixed="right">
+              <el-table-column label="操作" width="300" fixed="right">
                 <template #default="{ row }">
                   <div class="actions">
                     <el-button size="small" @click="openTaskEdit(row)">编辑</el-button>
+                    <el-button
+                      size="small" type="warning" plain
+                      :disabled="!row.enabled || row.status === 'SYNCING'"
+                      :loading="repairingCode === row.cookie_sync_task_code"
+                      @click="handleRepair(row)"
+                    >修复</el-button>
                     <el-button
                       size="small" type="primary"
                       :disabled="!row.enabled"

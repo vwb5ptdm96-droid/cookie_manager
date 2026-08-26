@@ -228,11 +228,7 @@ class CookieSyncTaskService:
                     self._notify_fail(row, f"{check_message}；无对应采集映射", response_preview)
                 else:
                     try:
-                        result = self.cookie_sync_service.create_request(
-                            domains=[mapping.domain],
-                            worker_ids=[mapping.worker_id],
-                            source_task_id=row.id,
-                        )
+                        task_id = self._dispatch_sync_task(session, row, mapping)
                     except Exception:
                         session.rollback()
                         logger.exception("下发采集任务失败 code=%s", code)
@@ -242,16 +238,6 @@ class CookieSyncTaskService:
                         session.commit()
                         self._notify_fail(row, "检测失败，下发采集任务失败", response_preview)
                     else:
-                        task_id = result["task_id"]
-                        row.status = "SYNCING"
-                        row.last_run_status = "SYNCING"
-                        row.last_result_message = (
-                            f"检测失败，已下发采集任务 {task_id} 给 {mapping.worker_id}，"
-                            f"等待上报（{row.sync_wait_timeout_seconds}s）"
-                        )
-                        row.sync_deadline_at = beijing_now() + timedelta(
-                            seconds=row.sync_wait_timeout_seconds
-                        )
                         session.commit()
                         add_step(f"⚠️ 检测失败，已下发采集任务 {task_id} 给 {mapping.worker_id}，进入 SYNCING")
 
@@ -267,6 +253,83 @@ class CookieSyncTaskService:
         result = self._serialize(row)
         result["check_detail"] = "\n".join(steps)
         return result
+
+    def execute_sync_repair(self, code: str) -> dict[str, object]:
+        """手动执行扩展采集：不经过检测，直接反查映射下发采集任务进入 SYNCING。
+
+        Spec REQ-007 AC-005。复检闭环与检测失效后的采集完全一致；
+        任务停用拒绝、已在 SYNCING 跳过、无映射返回 NO_MAPPING（不动任务状态）。
+        """
+        run_id = f"sync_repair_{uuid4().hex[:12]}"
+        steps: list[str] = []
+
+        def add_step(msg: str) -> None:
+            ts = beijing_now().strftime("%H:%M:%S")
+            steps.append(f"[{ts}] {msg}")
+
+        with self.session_factory() as session:
+            row = self._get_row(session, code)
+            if not row.enabled:
+                raise AppError("该采集任务已停用", "TASK_DISABLED")
+            if row.status == "SYNCING":
+                add_step("任务已在等待扩展上报，跳过重复触发")
+                result = self._serialize(row)
+                result["check_detail"] = "\n".join(steps)
+                return result
+
+            mapping = self._find_mapping(session, row)
+            if mapping is None:
+                raise AppError(
+                    "该业务记录无对应采集映射，无法执行扩展采集",
+                    "NO_MAPPING",
+                    status_code=409,
+                )
+            add_step("手动触发扩展采集")
+            add_step(f"命中映射: {mapping.worker_id} / {mapping.domain}")
+            try:
+                task_id = self._dispatch_sync_task(session, row, mapping)
+            except Exception:
+                session.rollback()
+                logger.exception("手动下发采集任务失败 code=%s", code)
+                raise AppError("下发采集任务失败", "DISPATCH_FAILED", status_code=500) from None
+            session.commit()
+            add_step(f"已下发采集任务 {task_id} 给 {mapping.worker_id}，进入 SYNCING")
+
+        self.log_service.write(
+            run_id=run_id,
+            run_type="COOKIE_SYNC",
+            task_id=row.id,
+            status="SYNCING",
+            title=row.cookie_sync_task_name,
+            message="\n".join(steps),
+        )
+        result = self._serialize(row)
+        result["check_detail"] = "\n".join(steps)
+        return result
+
+    def _dispatch_sync_task(
+        self, session: Session, row: CookieSyncTask, mapping: CookieSyncMapping
+    ) -> str:
+        """下发定向采集任务并置任务为 SYNCING（不 commit，由调用方提交）。
+
+        返回扩展任务 task_id。
+        """
+        result = self.cookie_sync_service.create_request(
+            domains=[mapping.domain],
+            worker_ids=[mapping.worker_id],
+            source_task_id=row.id,
+        )
+        task_id = result["task_id"]
+        row.status = "SYNCING"
+        row.last_run_status = "SYNCING"
+        row.last_result_message = (
+            f"已下发采集任务 {task_id} 给 {mapping.worker_id}，"
+            f"等待上报（{row.sync_wait_timeout_seconds}s）"
+        )
+        row.sync_deadline_at = beijing_now() + timedelta(
+            seconds=row.sync_wait_timeout_seconds
+        )
+        return task_id
 
     def recheck_after_sync(self, task_id: int) -> dict[str, object]:
         """扩展上报写回后复检：重新执行检测，PASS 则恢复，仍失败则 FAIL + 飞书。"""

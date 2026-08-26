@@ -84,6 +84,16 @@ def execute_cookie_sync_check(
     return success_response(CookieSyncTaskResponse.model_validate(result).model_dump())
 
 
+@router.post("/cookie-sync-tasks/{cookie_sync_task_code}/repair")
+def execute_cookie_sync_repair(
+    cookie_sync_task_code: str,
+    service: CookieSyncTaskService = Depends(build_cookie_sync_task_service),
+) -> dict[str, object]:
+    """手动执行扩展采集：不经过检测，直接下发采集任务进入 SYNCING（Spec REQ-007 AC-005）。"""
+    result = service.execute_sync_repair(cookie_sync_task_code)
+    return success_response(CookieSyncTaskResponse.model_validate(result).model_dump())
+
+
 @router.post("/cookie-sync-tasks/{cookie_sync_task_code}/clone")
 def clone_cookie_sync_task(
     cookie_sync_task_code: str,

@@ -95,6 +95,12 @@ export function executeCookieSyncTaskCheck(code: string): Promise<CookieSyncTask
   });
 }
 
+export function executeCookieSyncTaskRepair(code: string): Promise<CookieSyncTaskItem> {
+  return apiRequest<CookieSyncTaskItem>(`/cookie-sync-tasks/${code}/repair`, {
+    method: "POST",
+  });
+}
+
 export function deleteCookieSyncTask(code: string): Promise<void> {
   return apiRequest<void>(`/cookie-sync-tasks/${code}`, {
     method: "DELETE",
