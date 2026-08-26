@@ -62,6 +62,8 @@
 | SCOPE-012 | 采集映射表管理 | P0 | `(worker_id, domain) → (channel/shop_name/mobile_phone/dns)`，写库与反查双向使用 |
 | SCOPE-013 | 扩展接入 API 接收端 | P0 | `/api/ping` `/api/request` `/api/tasks` `/api/tasks/{id}/report` `/api/cookies`，`X-API-Key` 鉴权 |
 | SCOPE-014 | 采集 cookie 写回旧表 | P0 | 先查后改写回 `ods_cookie_playwright`，填 `cookie` + `str_cookie` |
+| SCOPE-015 | 部署配置可移植化 | P0 | 启动链路全部从 `.env` 读取（端口/路径/Chrome 路径），清理硬编码端口与盘符，部署机无 E 盘、默认端口被占时改 `.env` 即可启动 |
+| SCOPE-016 | 目录库 CDP 调试功能 | P0 | 目录库每目录存默认调试端口；可一键拉起/关闭带该目录（`--user-data-dir`）的可见 Chrome，CDP 端口供外部脚本连接调试；Chrome 路径走 `CHROME_PATH` |
 
 ### 2.2 不在本版本范围
 
@@ -286,7 +288,7 @@
 |---|---|---|---|
 | 健康检测任务 | 三 Tab 配置 + 主表格 | 检测任务名、cron、cookie 定位信息、检测 API、失败执行脚本、启动目录、运行模式、状态、最近检测/修复时间 | 新增、编辑、立即检测、执行修复脚本、查看日志、启停、克隆、删除 |
 | 脚本库 | 主表格 + 上传入口 | 脚本名、脚本编码、类型、平台、目录、主文件、版本、状态、运行配置 | 上传、详情、启停 |
-| 目录库 | 主表格 | Profile Key、相对路径、绝对路径预览、状态、锁状态、最近验证 | 登记、复检、锁定、解锁 |
+| 目录库 | 主表格 | Profile Key、相对路径、绝对路径预览、状态、锁状态、调试端口、最近验证 | 登记、复检、锁定、解锁、打开调试、关闭调试 |
 | 脚本运行 | 统计卡片 + 实例表格 | run_id、健康检测任务、脚本、启动目录、运行模式、状态、开始时间、运行时长、PID | 查看详情、查看日志、暂停/继续、取消 |
 | 运行日志 | 筛选栏 + 时间线/表格 | 时间、类型、状态、标题、消息、关联对象 | 筛选、查看详情 |
 | 环境自检 | 自检结果卡片/列表 | 检查项、状态、说明、明细 | 执行自检、查看详情 |
@@ -326,6 +328,7 @@
   - 绝对路径预览
   - 状态
   - 锁状态
+  - 调试端口
   - 最近验证时间
   - 备注
 - 脚本库列表 MUST 包含：
@@ -349,6 +352,7 @@
 - 登记 Profile 弹窗 MUST 包含：
   - Profile Key
   - 相对路径
+  - 调试端口
   - 备注
 - 上传脚本弹窗 MUST 包含：
   - 脚本名称
@@ -487,13 +491,17 @@
 管理部署机本地浏览器用户目录，保证脚本复用稳定登录态。
 
 **行为：**  
-用户可注册 Profile（目录库）、查看相对路径和绝对路径预览、锁定/解锁、复检；可绑定脚本（该脚本以该目录为默认启动目录执行）。
+用户可注册 Profile（目录库）、查看相对路径和绝对路径预览、锁定/解锁、复检；可绑定脚本（该脚本以该目录为默认启动目录执行）；可设置该目录的默认 CDP 调试端口，并一键拉起/关闭带该目录的可见 Chrome 调试窗口。
 
 **规则：**
 - MUST 仅保存相对 `RUNTIME_ROOT` 的路径，不直接持久化绝对路径。
 - MUST 禁止 `..`、路径穿越和危险字符。
 - MUST 支持状态 `MISSING/READY/LOCKED/RISK/CORRUPTED`。
 - MUST 在执行脚本前检查锁状态；锁由 ScriptRun 实例持有。
+- MUST 支持调试功能：为目录保存默认 CDP 调试端口（`debug_port`，可空）；「打开调试」拉起带该目录（`--user-data-dir`）的可见 Chrome，并以 `--remote-debugging-port` 暴露 CDP 端口供外部脚本连接；「关闭调试」清理该目录/端口对应的 Chrome 进程。
+- MUST 目录被锁定（`is_locked`）时禁止发起调试，前端按钮置灰、后端拒绝并返回锁冲突错误。
+- MUST 调试用 Chrome 可执行文件取 `.env` 的 `CHROME_PATH`，未配置时自动探测常见安装路径，找不到返回明确错误。
+- MUST 调试端口落在 1-65535 且不与脚本运行锁冲突（调试不占用目录锁，仅禁止在锁定时发起）。
 - SHOULD 显示最近验证时间和备注。
 - SHOULD 支持绑定脚本：一个 Profile 可关联多个脚本，脚本执行时优先使用该目录作为启动目录。
 
@@ -503,6 +511,7 @@
 |---|---|---:|---|
 | profile_key | string | Yes | 唯一 |
 | relative_path | string | Yes | 相对路径，必须在 `RUNTIME_ROOT` 下 |
+| debug_port | int | No | 默认 CDP 调试端口，1-65535，可空 |
 | note | string | No | 可空 |
 | 绑定脚本 | script_code[] | No | 可绑定多个脚本 |
 
@@ -521,6 +530,9 @@
 - [ ] AC-001: Given 用户提交相对路径, when 保存 Profile, then 数据库只保存相对路径且页面显示绝对路径预览。
 - [ ] AC-002: Given Profile 正被某运行实例锁定, when 另一实例尝试执行, then 系统因锁冲突拒绝执行。
 - [ ] AC-003: Given 用户点击复检, when 复检成功, then Profile 状态变为 `READY` 且更新时间刷新。
+- [ ] AC-004: Given 目录已登记且未被锁定, when 用户点击「打开调试」, then 系统拉起带该目录的可见 Chrome 并以指定端口暴露 CDP，返回调试地址。
+- [ ] AC-005: Given 目录被锁定, when 用户点击「打开调试」, then 前端置灰、后端拒绝并返回 `DIRECTORY_LOCKED`。
+- [ ] AC-006: Given 目录已发起调试, when 用户点击「关闭调试」, then 系统清理该目录/端口对应的 Chrome 进程。
 
 ### REQ-004: 脚本库管理
 
@@ -629,6 +641,9 @@
 **规则：**
 - MUST 展示 `DEPLOY_ROOT`、`RUNTIME_ROOT` 和关键子目录。
 - MUST 提供 `start_backend.bat` 启动示例。
+- MUST 部署启动链路从 `.env` 读取端口与路径：`APP_PORT` 决定服务监听端口（生产环境前端 `dist` 由后端同端口托管），`DEPLOY_ROOT/RUNTIME_ROOT/DATABASE_URL` 支持相对路径按项目根自动解析，跨盘符、端口被占时改 `.env` 即可启动，无需改代码。
+- MUST 前端不得硬编码后端端口：扩展接入的后端地址展示按当前页面 `origin` 动态取，开发代理按 `.env` 的 `APP_PORT` 解析。
+- MUST 调试用 Chrome 可执行文件取 `.env` 的 `CHROME_PATH`（未配置自动探测），供目录库调试功能使用。
 - MUST 记录 `CHECK/REPAIR` 日志类型（健康检测、修复脚本执行）。
 - MUST 支持日志状态 `SUCCESS/FAIL/RISK/WARN` 和条件筛选。
 - SHOULD 提供关联健康检测任务、脚本运行实例、日志文件、截图、trace 信息。
@@ -823,7 +838,7 @@
 | HealthTask | 健康检测任务 | `health_task_code`, `health_task_name`, `cookie_table`, `channel`, `shop_name`, `mobile_phone`, `dns`, `check_url`, `http_method`, `cron_expression`, `auto_repair_enabled`, `repair_script_id`, `repair_directory_id`, `status` |
 | ScriptRun | 脚本运行实例 | `run_id`, `health_task_code`, `script_id`, `script_code`, `directory_id`, `directory_key`, `run_mode`, `status`, `pid`, `artifact_dir`, `result_json` |
 | ScriptRegistry | 脚本注册信息 | `script_code`, `script_name`, `script_type`, `platform`, `script_dir`, `main_file`, `version`, `enabled`, `default_run_mode` |
-| ProfileRegistry | 本机 Profile 目录注册信息 | `profile_key`, `relative_path`, `status`, `is_locked`, `lock_owner`, `lock_run_id` |
+| ProfileRegistry | 本机 Profile 目录注册信息 | `profile_key`, `relative_path`, `status`, `is_locked`, `lock_owner`, `lock_run_id`, `debug_port` |
 | TaskRunLog | 运行日志 | `run_id`, `task_id`, `health_task_code`, `run_type`, `status`, `title` |
 | EnvCheckResult | 环境自检结果 | `check_key`, `check_name`, `status`, `message` |
 | LegacyCookieRecord | 旧 cookie 表记录 | `channel`, `shop_name`, `mobile_phone`, `DNS`, `cookie`, `headers`, `str_cookie`, `str_1`, `str_2`, `file` |
@@ -870,7 +885,7 @@
 | DEP-004 | Playwright | 自动维护脚本执行 | Yes | 使用本机浏览器 Profile |
 | DEP-005 | Vue 3 + TypeScript + Vite | 前端管理界面 | Yes | 参考原型与开发文档建议 |
 | DEP-006 | APScheduler | 定时执行健康检测 | Yes | 扫描启用检测任务 |
-| DEP-007 | Chrome/Chromium | 浏览器执行环境 | Yes | 脚本可能需要 headed 模式 |
+| DEP-007 | Chrome/Chromium | 浏览器执行环境 | Yes | 脚本可能需要 headed 模式；目录库调试用 Chrome 可执行文件走 `CHROME_PATH`（未配置自动探测） |
 | DEP-008 | 飞书机器人 Webhook | 失败/风控通知 | Yes | 检测失败与修复风控时推送提醒 |
 | DEP-009 | Chrome 扩展（Cookie 同步助手）+ 同事电脑浏览器 | 采集同事浏览器登录态 cookie | Yes | 扩展本体装在同事机器，平台仅实现接收端 API |
 | DEP-010 | 阿里云 RDS MySQL 写权限 | 扩展采集 cookie 写回 `ods_cookie_playwright` | Yes | 需 RDS 账号具备 UPDATE/INSERT 权限 |
@@ -923,7 +938,7 @@ MVP 完成条件：
 | Q-003 | 部署配置页面中的 `PUT /api/deploy/config` 是否真的允许修改运行配置，还是仅展示说明？ | Yes | 影响配置存储方式与运行时刷新机制 |
 | Q-004 | ~~旧 cookie 表的写回策略是否只允许脚本直接写库，还是也需要后端代写接口？~~ 已定 | No | 已定：由平台后端代写（Cookie 扩展采集写回旧表） |
 | Q-006 | `ods_cookie_playwright` 是否有可依赖的更新键/时间戳字段，RDS 账号是否具备写权限？ | Yes | 影响写回实现与数据新鲜度标记 |
-| Q-007 | 同事电脑到平台 8081 的网络可达性、防火墙放行与 API Key 分发方案？ | Yes | 扩展需跨机器访问平台 |
+| Q-007 | 同事电脑到平台服务的网络可达性、防火墙放行与 API Key 分发方案？ | Yes | 扩展需跨机器访问平台；服务端口由 `APP_PORT` 决定（部署机可在 `.env` 调整），扩展接入地址前端按当前 origin 动态展示 |
 | Q-005 | 前端是否要支持更细的日志详情页、截图预览和 trace 下载？ | No | 当前原型仅展示列表和基础详情能力 |
 
 ---

@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     app_env: str = Field(default="dev", alias="APP_ENV")
     app_name: str = Field(default="session-maintenance-system", alias="APP_NAME")
     app_host: str = Field(default="0.0.0.0", alias="APP_HOST")
-    app_port: int = Field(default=8080, alias="APP_PORT")
+    app_port: int = Field(default=8081, alias="APP_PORT")
     deploy_root: Path = Field(default=PROJECT_ROOT, alias="DEPLOY_ROOT")
     runtime_root: Path = Field(default=DEFAULT_RUNTIME_ROOT, alias="RUNTIME_ROOT")
     database_url: str = Field(
@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     txy_password: str = Field(default="", alias="TXY_PASSWORD")
     feishu_webhook_url: str = Field(default="", alias="FEISHU_WEBHOOK_URL")
     cookie_sync_api_key: str = Field(default="", alias="COOKIE_SYNC_API_KEY")
+    chrome_path: str = Field(default="", alias="CHROME_PATH")
 
     @field_validator("deploy_root", "runtime_root", mode="before")
     @classmethod

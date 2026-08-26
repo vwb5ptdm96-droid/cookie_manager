@@ -74,3 +74,15 @@ def update_profile(
 def delete_profile(profile_key: str, service: ProfileService = Depends(build_profile_service)) -> dict[str, object]:
     service.delete(profile_key)
     return success_response({"deleted": True})
+
+
+@router.post("/profiles/{profile_key}/debug/open")
+def open_profile_debug(profile_key: str, service: ProfileService = Depends(build_profile_service)) -> dict[str, object]:
+    result = service.open_debug(profile_key)
+    return success_response(result)
+
+
+@router.post("/profiles/{profile_key}/debug/close")
+def close_profile_debug(profile_key: str, service: ProfileService = Depends(build_profile_service)) -> dict[str, object]:
+    result = service.close_debug(profile_key)
+    return success_response(result)

@@ -11,7 +11,7 @@ if exist ".env" (
 )
 
 if not defined APP_HOST set "APP_HOST=0.0.0.0"
-if not defined APP_PORT set "APP_PORT=8080"
+if not defined APP_PORT set "APP_PORT=8081"
 if not defined DEPLOY_ROOT set "DEPLOY_ROOT=%ROOT_DIR:~0,-1%"
 if not defined RUNTIME_ROOT set "RUNTIME_ROOT=%ROOT_DIR%runtime"
 

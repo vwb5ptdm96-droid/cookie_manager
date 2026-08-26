@@ -48,10 +48,11 @@ pnpm install
 | `APP_ENV` | 运行环境标识 | `dev` |
 | `APP_NAME` | FastAPI 应用名 | `session-maintenance-system` |
 | `APP_HOST` | 后端监听地址 | `0.0.0.0` |
-| `APP_PORT` | 后端监听端口 | `8080` |
+| `APP_PORT` | 后端监听端口 | `8081` |
 | `DEPLOY_ROOT` | 项目根目录 | 当前仓库根目录 |
 | `RUNTIME_ROOT` | 运行时根目录 | `<项目根目录>\\runtime` |
 | `DATABASE_URL` | 主业务数据库连接串 | 默认 SQLite，本地文件位于 `runtime/session_maintenance.db` |
+| `CHROME_PATH` | 目录库「打开调试」使用的 Chrome 可执行文件路径 | 自动探测常见安装路径 |
 
 说明：
 
@@ -72,9 +73,11 @@ DATABASE_URL=mysql+pymysql://user:password@127.0.0.1:3306/session_maintenance?ch
 
 这个脚本会做三件事：
 
-1. 创建 `runtime` 下的关键目录。
-2. 执行 `alembic upgrade head`。
-3. 启动 `uvicorn app.main:app`。
+1. 读取 `.env`（端口、路径、Chrome 路径全部由 `.env` 驱动，路径不配走自动检测）。
+2. 创建 `runtime` 下的关键目录、执行 `alembic upgrade head`。
+3. 启动 `uvicorn app.main:app`，监听 `APP_PORT`。
+
+**部署可移植**：`APP_HOST/APP_PORT/DEPLOY_ROOT/RUNTIME_ROOT/DATABASE_URL` 均来自 `.env`，按代码所在位置自动推导，不绑定盘符。生产环境前端 `dist` 由后端同端口托管，浏览器直接访问 `http://<服务器IP>:<APP_PORT>` 即可；默认端口被占时只改 `.env` 的 `APP_PORT`。
 
 只验证迁移时可以执行：
 
@@ -87,13 +90,13 @@ DATABASE_URL=mysql+pymysql://user:password@127.0.0.1:3306/session_maintenance?ch
 ```powershell
 cd backend
 python -m alembic -c alembic.ini upgrade head
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --app-dir .
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8081 --app-dir .
 ```
 
-后端默认地址：
+后端默认地址（端口以 `.env` 的 `APP_PORT` 为准）：
 
-- API: `http://127.0.0.1:8080`
-- 健康检查: `http://127.0.0.1:8080/api/health`
+- API: `http://127.0.0.1:<APP_PORT>`
+- 健康检查: `http://127.0.0.1:<APP_PORT>/api/health`
 
 ## 启动前端
 

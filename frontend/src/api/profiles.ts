@@ -8,6 +8,7 @@ export interface ProfileItem {
   status: string;
   is_locked: boolean;
   lock_owner: string | null;
+  debug_port: number | null;
   note: string | null;
   last_verified_at: string | null;
   updated_at: string | null;
@@ -20,7 +21,16 @@ interface ProfileListResponse {
 export interface ProfileUpsertPayload {
   profile_key: string;
   relative_path: string;
+  debug_port: number | null;
   note: string;
+}
+
+export interface ProfileDebugOpenResult {
+  profile_key: string;
+  port: number;
+  cdp_url: string;
+  chrome_path: string;
+  already_running: boolean;
 }
 
 export function fetchProfiles(): Promise<ProfileListResponse> {
@@ -66,5 +76,17 @@ export function updateProfile(profileKey: string, payload: ProfileUpsertPayload)
 export function deleteProfile(profileKey: string): Promise<void> {
   return apiRequest<void>(`/profiles/${profileKey}`, {
     method: "DELETE",
+  });
+}
+
+export function openProfileDebug(profileKey: string): Promise<ProfileDebugOpenResult> {
+  return apiRequest<ProfileDebugOpenResult>(`/profiles/${profileKey}/debug/open`, {
+    method: "POST",
+  });
+}
+
+export function closeProfileDebug(profileKey: string): Promise<{ profile_key: string; port: number; closed: boolean }> {
+  return apiRequest<{ profile_key: string; port: number; closed: boolean }>(`/profiles/${profileKey}/debug/close`, {
+    method: "POST",
   });
 }

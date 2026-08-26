@@ -14,6 +14,7 @@ class ProfileRegistry(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     profile_key: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     relative_path: Mapped[str] = mapped_column(String(255), nullable=False)
+    debug_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="MISSING")
     is_locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     lock_owner: Mapped[str | None] = mapped_column(String(128), nullable=True)

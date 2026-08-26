@@ -78,8 +78,8 @@ const tabName = ref("tasks");
 // ── 扩展接入展示 ──
 
 function apiBaseUrl(): string {
-  const host = window.location.hostname || "127.0.0.1";
-  return `${window.location.protocol}//${host}:8081/api`;
+  // 后端端口由 .env 的 APP_PORT 决定；生产环境前端与后端同源，直接用当前 origin 动态取，不写死端口
+  return `${window.location.origin}/api`;
 }
 
 const apiKeyHint = "配置在服务端 .env，为安全不在此展示；留空则关闭鉴权（仅限本地联调）";

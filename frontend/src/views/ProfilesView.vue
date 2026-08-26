@@ -2,7 +2,7 @@
 import { onMounted, ref } from "vue";
 import { ElMessage } from "element-plus";
 
-import { createProfile, deleteProfile, fetchProfiles, updateProfile, type ProfileItem, type ProfileUpsertPayload } from "@/api/profiles";
+import { closeProfileDebug, createProfile, deleteProfile, fetchProfiles, openProfileDebug, updateProfile, type ProfileItem, type ProfileUpsertPayload } from "@/api/profiles";
 import { fetchScripts, updateScriptProfile, type ScriptItem } from "@/api/scripts";
 import ProfileFormDialog from "@/components/ProfileFormDialog.vue";
 
@@ -42,6 +42,28 @@ async function handleDelete(profile: ProfileItem): Promise<void> {
     await loadProfiles();
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : "删除 Profile 失败");
+  }
+}
+
+async function handleOpenDebug(profile: ProfileItem): Promise<void> {
+  try {
+    const result = await openProfileDebug(profile.profile_key);
+    if (result.already_running) {
+      ElMessage.info(`调试 Chrome 已在运行，CDP 端口 ${result.port}（${result.cdp_url}）`);
+    } else {
+      ElMessage.success(`已打开调试窗口，CDP 端口 ${result.port}（${result.cdp_url}）`);
+    }
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "打开调试失败");
+  }
+}
+
+async function handleCloseDebug(profile: ProfileItem): Promise<void> {
+  try {
+    const result = await closeProfileDebug(profile.profile_key);
+    ElMessage.success(`已关闭调试 Chrome，端口 ${result.port}`);
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "关闭调试失败");
   }
 }
 
@@ -121,8 +143,15 @@ onMounted(loadProfiles);
               </div>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="180" fixed="right">
+          <el-table-column label="调试端口" width="110">
             <template #default="{ row }">
+              <span>{{ row.debug_port ?? "默认 9222" }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="340" fixed="right">
+            <template #default="{ row }">
+              <el-button size="small" :disabled="row.is_locked" @click="handleOpenDebug(row)">打开调试</el-button>
+              <el-button size="small" :disabled="row.is_locked" @click="handleCloseDebug(row)">关闭调试</el-button>
               <el-button size="small" @click="handleEdit(row)">编辑</el-button>
               <el-button size="small" type="danger" @click="handleDelete(row)">删除</el-button>
             </template>

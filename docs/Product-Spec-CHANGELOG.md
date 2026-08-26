@@ -1,5 +1,12 @@
 # Product Spec Changelog
 
+## 2026-08-26 · 部署可移植化 + 目录库 CDP 调试
+
+- 新增：SCOPE-015 部署配置可移植化——启动链路全部从 `.env` 读取（`APP_PORT` 端口、`DEPLOY_ROOT/RUNTIME_ROOT/DATABASE_URL` 相对路径自动解析、`CHROME_PATH` Chrome 路径），清理前端硬编码端口（扩展接入展示改动态 origin、开发代理按 `.env` 解析），部署机无 E 盘、默认端口被占时改 `.env` 即可启动。
+- 新增：SCOPE-016 目录库 CDP 调试功能——每目录存默认调试端口 `debug_port`，「打开调试」拉起带该目录（`--user-data-dir`）的可见 Chrome 并暴露 CDP 端口，「关闭调试」清理对应 Chrome 进程；目录锁定时禁用；Chrome 路径走 `CHROME_PATH`（未配置自动探测）。
+- 调整：REQ-003 Profile 目录管理新增 `debug_port` 字段与调试规则/验收（AC-004/005/006）；REQ-006 部署配置新增 `.env` 可移植约束；数据模型 ProfileRegistry 新增 `debug_port`。
+- 调整：Q-007 明确服务端口由 `APP_PORT` 决定，扩展接入地址按当前 origin 动态展示。
+
 ## 2026-08-25 · Cookie 扩展采集迭代
 
 - 新增：Cookie 扩展采集任务模块（独立模块，复用健康检测检测逻辑，失效动作=扩展采集，不绑定目录；导航位于健康检测任务之后）。

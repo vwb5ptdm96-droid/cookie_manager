@@ -22,6 +22,7 @@ const formRef = ref<FormInstance>();
 const form = reactive<ProfileUpsertPayload>({
   profile_key: "",
   relative_path: "",
+  debug_port: null,
   note: "",
 });
 const selectedScriptCodes = ref<string[]>([]);
@@ -71,12 +72,14 @@ watch(
     if (opened && props.profile) {
       form.profile_key = props.profile.profile_key;
       form.relative_path = props.profile.relative_path;
+      form.debug_port = props.profile.debug_port ?? null;
       form.note = props.profile.note || "";
       initSelections();
     }
     if (!opened) {
       form.profile_key = "";
       form.relative_path = "";
+      form.debug_port = null;
       form.note = "";
       selectedScriptCodes.value = [];
     }
@@ -89,6 +92,7 @@ watch(
     if (profile && props.modelValue) {
       form.profile_key = profile.profile_key;
       form.relative_path = profile.relative_path;
+      form.debug_port = profile.debug_port ?? null;
       form.note = profile.note || "";
       initSelections();
     }
@@ -146,6 +150,10 @@ async function handleSubmit(): Promise<void> {
           </el-input>
         </div>
       </el-form-item>
+      <el-form-item label="调试端口">
+        <el-input-number v-model="form.debug_port" :min="1" :max="65535" placeholder="默认 9222" controls-position="right" />
+        <div class="field-tip">目录库「打开调试」使用的默认 CDP 端口，不填默认 9222</div>
+      </el-form-item>
       <el-form-item label="备注">
         <el-input v-model="form.note" type="textarea" :rows="3" placeholder="可记录来源、机器说明或绑定备注" />
       </el-form-item>
@@ -171,6 +179,14 @@ async function handleSubmit(): Promise<void> {
 
 .path-picker {
   width: 100%;
+}
+
+.field-tip {
+  width: 100%;
+  margin-top: 4px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 </style>

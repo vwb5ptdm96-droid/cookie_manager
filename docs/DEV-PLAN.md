@@ -364,6 +364,57 @@
 - 采集任务与映射可在页面增删改查，立即检测/触发采集与后端联通
 - 扩展接入信息页展示地址、密钥、安装步骤；前端 `npm run build` 通过
 
+### Phase 11：部署配置可移植化 🔄
+
+**目标**
+
+让部署链路完全由 `.env` 驱动，部署机无 E 盘、默认端口被占时改 `.env` 即可启动，清理硬编码端口。
+
+**交付物**
+
+- 前端开发代理按根目录 `.env` 的 `APP_PORT` 解析目标，不再写死 `8081`
+- 扩展接入后端地址展示改为按当前页面 `origin` 动态取，不再写死 `:8081/api`
+- `.env.example` / README 补部署说明：路径项不配走自动检测、`APP_PORT` 换空闲端口、`CHROME_PATH` 指定调试 Chrome
+
+**关键文件**
+
+- `frontend/vite.config.ts`
+- `frontend/src/views/CookieSyncTasksView.vue`
+- `.env.example`、`README.md`
+
+**完成标准**
+
+- 部署机 `.env` 配置不同端口/路径后，点 `start_backend.bat` 可正常拉起后端与前端（`dist` 同端口托管）
+- 前端无硬编码后端端口，扩展接入地址按当前 origin 动态展示
+
+### Phase 12：目录库 CDP 调试功能 🔄
+
+**目标**
+
+目录库每目录存默认调试端口，可一键拉起/关闭带该目录的可见 Chrome（CDP 端口供外部脚本连接调试）。
+
+**交付物**
+
+- `profile_registry` 新增 `debug_port` 列 + Alembic 迁移
+- `config.py` 新增 `CHROME_PATH`（未配置自动探测常见安装路径）
+- 新增调试端点：`POST /api/profiles/{key}/debug/open`（拉起 headed Chrome：`--user-data-dir` + `--remote-debugging-port`，等待 CDP 就绪返回调试地址）、`POST /api/profiles/{key}/debug/close`（清理该目录/端口 Chrome）
+- 目录锁定（`is_locked`）时打开调试被拒（后端 `DIRECTORY_LOCKED`）
+- 目录库页面：调试端口列、「打开调试」「关闭调试」按钮（锁定时置灰）；Profile 弹窗新增调试端口字段
+
+**关键文件**
+
+- `backend/app/models/profile_registry.py`、`backend/alembic/versions/*.py`
+- `backend/app/core/config.py`、`backend/app/services/chrome_utils.py`
+- `backend/app/services/profile_service.py`、`backend/app/api/routes/profiles.py`
+- `backend/app/schemas/profile_registry.py`
+- `frontend/src/views/ProfilesView.vue`、`frontend/src/components/ProfileFormDialog.vue`、`frontend/src/api/profiles.ts`
+
+**完成标准**
+
+- 目录可设置调试端口；未锁定目录点「打开调试」拉起带该目录的可见 Chrome 并返回调试地址
+- 锁定目录点「打开调试」前端置灰、后端返回 `DIRECTORY_LOCKED`
+- 「关闭调试」清理对应 Chrome；后端测试与前端 `npm run build` 通过
+
 ## 6. 数据库表与归属阶段
 
 | 表 / 实体 | 归属阶段 | 说明 |
@@ -371,7 +422,7 @@
 | `health_task` | Phase 2 / 4 | 健康检测任务：检测配置、调度、失败修复、状态 |
 | `script_run` | Phase 2 / 5 | 脚本运行实例：状态机、PID、产物、控制 |
 | `script_registry` | Phase 2 / 3 | 脚本元信息、版本、启停、运行配置 |
-| `profile_registry` | Phase 2 / 3 | Profile 目录路径、锁状态（`is_locked`/`lock_owner`/`lock_run_id`） |
+| `profile_registry` | Phase 2 / 3 / 12 | Profile 目录路径、锁状态（`is_locked`/`lock_owner`/`lock_run_id`）、调试端口 `debug_port` |
 | `task_run_log` | Phase 2 / 7 | 健康检测、修复脚本运行日志 |
 | `env_check_result` | Phase 2 / 7 | 最近一次环境自检结果 |
 | `cookie_sync_task` | Phase 7 / 9 | 采集任务：检测配置、调度、同步超时、状态 |
@@ -402,6 +453,9 @@
    - Phase 8 扩展接入 API 接收端
    - Phase 9 采集任务检测与扩展采集闭环
    - Phase 10 采集模块前端页面
-3. 全部通过后做完整联调与发布准备。
+3. **Phase 11-12（部署可移植化 + 目录库 CDP 调试）**：
+   - Phase 11 清理硬编码端口，部署链路全部 `.env` 驱动
+   - Phase 12 目录库调试端口 + 打开/关闭调试
+4. 全部通过后做完整联调与发布准备。
 
 > 说明：扩展本体（Chrome 扩展）已在 `D:\公司小疑问\chrome扩展` 联调验证过，平台侧只需实现接收端 API，扩展代码不改（Phase 8 以现有 `background.js` 契约为准；Phase 10 将扩展包纳入仓库便于分发）。
