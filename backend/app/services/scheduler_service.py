@@ -78,6 +78,75 @@ class HealthTaskScheduler:
                     except Exception as exc:
                         logger.exception("调度定时修复失败 [%s]: %s", task.health_task_code, exc)
 
+        # Cookie 采集任务扫描（Phase 9：定时检测 + SYNCING 复检/超时收尾）
+        self._scan_cookie_sync_tasks()
+
+    def _scan_cookie_sync_tasks(self) -> None:
+        """扫描 Cookie 采集任务：cron 到期触发检测；SYNCING 任务按上报完成复检 / 超时 FAIL。
+
+        独立于健康检测任务调度，两者互不耦合（Spec OUT-010）。
+        """
+        from app.models.cookie_sync_job import CookieSyncJob
+        from app.models.cookie_sync_task import CookieSyncTask
+        from app.services.cookie_sync_task_service import (
+            CookieSyncTaskService,
+            beijing_now,
+        )
+
+        now = datetime.now()
+        service = CookieSyncTaskService(engine=self.engine, runtime_root=self.runtime_root)
+
+        with Session(self.engine) as session:
+            sync_tasks = session.execute(
+                select(CookieSyncTask).where(CookieSyncTask.enabled.is_(True))
+            ).scalars().all()
+
+        for task in sync_tasks:
+            # ── 定时检测 ──
+            if task.cron_expression:
+                if self._match_cron(task.cron_expression.strip(), now):
+                    try:
+                        service.execute_check(task.cookie_sync_task_code)
+                    except Exception as exc:
+                        logger.exception("采集任务调度检测失败 [%s]: %s", task.cookie_sync_task_code, exc)
+            else:
+                if task.last_checked_at is not None:
+                    elapsed = (now - task.last_checked_at).total_seconds()
+                    if elapsed < 300:
+                        continue
+                try:
+                    service.execute_check(task.cookie_sync_task_code)
+                except Exception as exc:
+                    logger.exception("采集任务调度检测失败 [%s]: %s", task.cookie_sync_task_code, exc)
+
+        # ── SYNCING 收尾：上报完成 → 复检；超时 → FAIL ──
+        with Session(self.engine) as session:
+            syncing_rows = session.execute(
+                select(CookieSyncTask).where(CookieSyncTask.status == "SYNCING")
+            ).scalars().all()
+            jobs_by_source: dict[int, list[CookieSyncJob]] = {}
+            for row in syncing_rows:
+                jobs = session.execute(
+                    select(CookieSyncJob)
+                    .where(CookieSyncJob.source_task_id == row.id)
+                    .order_by(CookieSyncJob.created_at.desc())
+                ).scalars().all()
+                jobs_by_source[row.id] = jobs
+
+        for row in syncing_rows:
+            jobs = jobs_by_source.get(row.id, [])
+            latest = jobs[0] if jobs else None
+            if latest is not None and latest.status == "done":
+                try:
+                    service.recheck_after_sync(row.id)
+                except Exception as exc:
+                    logger.exception("采集任务复检失败 [%s]: %s", row.cookie_sync_task_code, exc)
+            elif row.sync_deadline_at is not None and beijing_now() > row.sync_deadline_at:
+                try:
+                    service.fail_on_timeout(row.id)
+                except Exception as exc:
+                    logger.exception("采集任务超时处理失败 [%s]: %s", row.cookie_sync_task_code, exc)
+
     # ── 简易 cron 匹配（标准 5 位表达式）──
 
     @staticmethod

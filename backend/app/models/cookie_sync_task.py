@@ -44,6 +44,8 @@ class CookieSyncTask(Base):
     last_result_message: str | None = Column(Text, nullable=True)
     last_checked_at: datetime | None = Column(DateTime, nullable=True)
     last_sync_at: datetime | None = Column(DateTime, nullable=True)
+    # SYNCING 等待扩展上报的截止时间；超时后按 FAIL 处理（Spec REQ-007 / FLOW-004）
+    sync_deadline_at: datetime | None = Column(DateTime, nullable=True)
 
     created_at: datetime = Column(DateTime, nullable=False, server_default=func.now())
     updated_at: datetime = Column(DateTime, nullable=False, server_default=func.now(), onupdate=datetime.now)

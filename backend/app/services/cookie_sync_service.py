@@ -58,7 +58,18 @@ class CookieSyncService:
 
     # ── 入队：POST /api/request ──
 
-    def create_request(self, domains: list[str], worker_ids: list[str]) -> dict[str, object]:
+    def create_request(
+        self,
+        domains: list[str],
+        worker_ids: list[str],
+        *,
+        source_task_id: int | None = None,
+    ) -> dict[str, object]:
+        """创建采集任务入队。
+
+        `source_task_id`：可选，关联发起该采集的 cookie_sync_task.id，
+        供采集任务闭环定位"上报完成后复检"（Phase 9）。
+        """
         if not domains:
             raise AppError("domains 不能为空", "EMPTY_DOMAINS")
 
@@ -72,6 +83,7 @@ class CookieSyncService:
                         worker_id=wid,
                         domains=json.dumps(domains, ensure_ascii=False),
                         status="pending",
+                        source_task_id=source_task_id,
                     )
                     session.add(job)
                     jobs.append(job)
@@ -82,6 +94,7 @@ class CookieSyncService:
                     worker_id=None,
                     domains=json.dumps(domains, ensure_ascii=False),
                     status="pending",
+                    source_task_id=source_task_id,
                 )
                 session.add(job)
                 jobs.append(job)

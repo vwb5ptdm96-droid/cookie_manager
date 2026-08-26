@@ -253,7 +253,7 @@
 - 前端 `npm run build` 通过，导航与快捷操作符合新 Spec
 - 主链路 `定时检测 -> 失败 -> 自动修复 -> 飞书提醒 -> 状态回写` 跑通
 
-### Phase 7：Cookie 采集数据模型与扩展写回能力 ⏳
+### Phase 7：Cookie 采集数据模型与扩展写回能力 ✅
 
 **目标**
 
@@ -281,7 +281,7 @@
 - legacy 写回：已有记录更新、无记录插入，`str_cookie` 拼接正确
 - 后端测试通过（含写回单测）
 
-### Phase 8：扩展接入 API 接收端 ⏳
+### Phase 8：扩展接入 API 接收端 ✅
 
 **目标**
 
@@ -306,7 +306,7 @@
 - 用 TestClient 走通 `ping → request → tasks?worker_id → report`，库中按映射写入正确（cookie + str_cookie）
 - 无/错 `X-API-Key` 返回 401；无映射上报丢弃并记 WARN 日志
 
-### Phase 9：采集任务检测与扩展采集闭环 ⏳
+### Phase 9：采集任务检测与扩展采集闭环 ✅
 
 **目标**
 
