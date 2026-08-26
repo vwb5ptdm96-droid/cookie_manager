@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel
 
 
@@ -25,3 +27,44 @@ class CookieSyncUpload(BaseModel):
     cookies: list[dict[str, object]]
     worker_id: str | None = None
     collected_at: str | None = None
+
+
+class CookieSyncMappingResponse(BaseModel):
+    """采集映射（Spec REQ-008）。"""
+
+    id: int
+    worker_id: str
+    domain: str
+    channel: str
+    shop_name: str | None
+    mobile_phone: str | None
+    dns: str
+    remark: str | None
+    last_report_at: datetime | None
+    last_report_count: int
+    created_at: datetime | None
+    updated_at: datetime | None
+
+
+class CookieSyncMappingCreateRequest(BaseModel):
+    worker_id: str
+    domain: str
+    channel: str
+    shop_name: str | None = None
+    mobile_phone: str | None = None
+    dns: str
+    remark: str | None = None
+
+
+class CookieSyncMappingUpdateRequest(BaseModel):
+    worker_id: str | None = None
+    domain: str | None = None
+    channel: str | None = None
+    shop_name: str | None = None
+    mobile_phone: str | None = None
+    dns: str | None = None
+    remark: str | None = None
+
+
+class CookieSyncMappingListResponse(BaseModel):
+    items: list[CookieSyncMappingResponse]

@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from "vue-router";
 
+import CookieSyncTasksView from "@/views/CookieSyncTasksView.vue";
 import DeployView from "@/views/DeployView.vue";
 import EnvironmentView from "@/views/EnvironmentView.vue";
 import HealthTasksView from "@/views/HealthTasksView.vue";
@@ -17,6 +18,14 @@ const routes = [
     meta: {
       title: "健康检测任务",
       description: "配置旧 cookie 检测规则、高级调度和失败后自动修复。检测失败时自动执行维护脚本并写入新 cookie。",
+    },
+  },
+  {
+    path: "/cookie-sync-tasks",
+    component: CookieSyncTasksView,
+    meta: {
+      title: "Cookie 采集任务",
+      description: "采集任务定时/手动检测 cookie 有效性，失效时通过同事浏览器扩展补采并写回旧表，实现检测→补采→复检闭环。",
     },
   },
   {

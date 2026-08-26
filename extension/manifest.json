@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "Cookie 同步助手",
+  "version": "1.0.0",
+  "description": "按需/定时读取指定网站的 Cookie,并上报到后端服务,供采集脚本使用。",
+  "permissions": [
+    "cookies",
+    "storage",
+    "alarms"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Cookie 同步助手"
+  },
+  "options_page": "options.html",
+  "externally_connectable": {
+    "matches": [
+      "http://localhost/*",
+      "http://127.0.0.1/*"
+    ]
+  }
+}

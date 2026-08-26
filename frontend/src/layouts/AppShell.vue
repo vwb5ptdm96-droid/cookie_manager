@@ -8,6 +8,7 @@ const route = useRoute();
 
 const items = [
   { label: "健康检测任务", path: "/health-tasks" },
+  { label: "Cookie 采集任务", path: "/cookie-sync-tasks" },
   { label: "脚本库", path: "/scripts" },
   { label: "目录库", path: "/profiles" },
   { label: "脚本运行", path: "/script-runs" },
