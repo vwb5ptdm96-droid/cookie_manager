@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -27,6 +28,7 @@ def _setup(tmp_path: Path):
                     DNS varchar(64) not null,
                     cookie text,
                     str_cookie text,
+                    headers text,
                     primary key (channel, shop_name, mobile_phone, DNS)
                 )
                 """
@@ -252,6 +254,68 @@ def test_manual_upload_updates_existing(tmp_path: Path) -> None:
         row = _get_ods_row(engine)
         assert row is not None
         assert row["str_cookie"] == "sid=new_value"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_manual_upload_with_headers_writes_headers_col(tmp_path: Path) -> None:
+    engine = _setup(tmp_path)
+    try:
+        with TestClient(app) as client:
+            r = client.post(
+                "/api/cookies/manual",
+                json={
+                    "channel": "WEIXIN",
+                    "shop_name": "shop-a",
+                    "mobile_phone": "13900000002",
+                    "dns": "store.weixin.qq.com",
+                    "cookies": [{"name": "sid", "value": "abc", "domain": "store.weixin.qq.com"}],
+                    "headers": {"User-Agent": "Mozilla/5.0", "X-Token": "tok123"},
+                },
+            )
+        assert r.status_code == 200
+        row = _get_ods_row(engine)
+        assert row is not None
+        assert json.loads(row["headers"]) == {"User-Agent": "Mozilla/5.0", "X-Token": "tok123"}
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_manual_upload_update_with_headers_overwrites_col(tmp_path: Path) -> None:
+    engine = _setup(tmp_path)
+    _seed_ods_row(engine)
+    try:
+        with TestClient(app) as client:
+            # 更新带 headers：headers 列覆盖
+            r1 = client.post(
+                "/api/cookies/manual",
+                json={
+                    "channel": "WEIXIN",
+                    "shop_name": "shop-a",
+                    "mobile_phone": "13900000002",
+                    "dns": "store.weixin.qq.com",
+                    "cookies": [{"name": "sid", "value": "abc", "domain": "store.weixin.qq.com"}],
+                    "headers": {"User-Agent": "Chrome/130"},
+                },
+            )
+            assert r1.status_code == 200
+            assert r1.json()["is_new"] is False
+            assert json.loads(_get_ods_row(engine)["headers"]) == {"User-Agent": "Chrome/130"}
+
+            # 更新不带 headers：headers 列保留旧值，不覆盖为空
+            r2 = client.post(
+                "/api/cookies/manual",
+                json={
+                    "channel": "WEIXIN",
+                    "shop_name": "shop-a",
+                    "mobile_phone": "13900000002",
+                    "dns": "store.weixin.qq.com",
+                    "cookies": [{"name": "sid", "value": "def", "domain": "store.weixin.qq.com"}],
+                },
+            )
+            assert r2.status_code == 200
+            row = _get_ods_row(engine)
+            assert json.loads(row["headers"]) == {"User-Agent": "Chrome/130"}
     finally:
         app.dependency_overrides.clear()
 

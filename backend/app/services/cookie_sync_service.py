@@ -183,11 +183,13 @@ class CookieSyncService:
         mobile_phone: str | None,
         dns: str,
         cookies: list[dict[str, object]],
+        headers: dict[str, str] | None = None,
     ) -> dict[str, object]:
         """手动上报「Cookie 一键上报」扩展提交：不经映射表，按四字段 upsert 写回旧表。
 
         存在则更新、不存在则插入（复用 legacy_cookie_service.upsert_by_lookup），
-        无 worker 归属、不写 cookie_sync_mapping。返回写入条数与是否新增。
+        无 worker 归属、不写 cookie_sync_mapping。headers 可选，随 cookie 一并写入旧表 headers 列。
+        返回写入条数与是否新增。
         """
         if not cookies:
             raise AppError("cookies 不能为空", "EMPTY_COOKIES")
@@ -203,6 +205,7 @@ class CookieSyncService:
                 ),
                 cookie_json=cookie_json,
                 str_cookie=str_cookie,
+                headers=json.dumps(headers, ensure_ascii=False) if headers else None,
             )
         except SQLAlchemyError:
             logger.exception("手动上报写回 ods 表失败 channel=%s dns=%s", channel, dns)

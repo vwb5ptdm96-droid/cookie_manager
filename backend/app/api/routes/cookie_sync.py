@@ -90,4 +90,5 @@ def upload_manual(
         mobile_phone=payload.mobile_phone,
         dns=payload.dns,
         cookies=payload.cookies,
+        headers=payload.headers,
     )

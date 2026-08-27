@@ -64,7 +64,7 @@
 | SCOPE-014 | 采集 cookie 写回旧表 | P0 | 先查后改写回 `ods_cookie_playwright`，填 `cookie` + `str_cookie` |
 | SCOPE-015 | 部署配置可移植化 | P0 | 启动链路全部从 `.env` 读取（端口/路径/Chrome 路径），清理硬编码端口与盘符，部署机无 E 盘、默认端口被占时改 `.env` 即可启动 |
 | SCOPE-016 | 目录库 CDP 调试功能 | P0 | 目录库每目录存默认调试端口；可一键拉起/关闭带该目录（`--user-data-dir`）的可见 Chrome，CDP 端口供外部脚本连接调试；Chrome 路径走 `CHROME_PATH` |
-| SCOPE-017 | 手动 Cookie 上报扩展 | P0 | 独立 MV3 Chrome 扩展「Cookie 一键上报」，以页面内可移动悬浮球为主入口，一键抓取当前页面 cookie，手动填写 `channel/shop_name/mobile_phone/dns` 写回 `ods_cookie_playwright`；不经映射表、无采集者概念；重复上传按四字段 upsert；没抓到 cookie 时支持刷新当前页面重抓；内置后端联通测试；纯粹独立、不挂平台前端 |
+| SCOPE-017 | 手动 Cookie 上报扩展 | P0 | 独立 MV3 Chrome 扩展「Cookie 一键上报」，以页面内可移动悬浮球为主入口，一键抓取当前页面 cookie 与请求头，手动填写 `channel/shop_name/mobile_phone/dns` 写回 `ods_cookie_playwright`；请求头经 `chrome.debugger`（CDP 通道）捕获当前域名 API 完整请求头（含受保护头）一并入库；不经映射表、无采集者概念；重复上传按四字段 upsert；没抓到 cookie 时支持刷新当前页面重抓；内置后端联通测试；纯粹独立、不挂平台前端 |
 
 ### 2.2 不在本版本范围
 
@@ -247,13 +247,15 @@
 **主路径：**
 1. 页面内悬浮球（content script 注入，可拖动）点击展开上报面板，自动读取当前标签页 URL，`chrome.cookies.getAll({url})` 抓取当前页面相关 cookie（经 background 转发）。
 2. 面板展示抓取到的 cookie 数量（脱敏），用户手动填写定位字段：channel（必填）、shop_name（可空）、mobile_phone（可空）、dns（必填）。
-3. 用户点击提交，扩展 `POST /api/cookies/manual` 携带 `{channel, shop_name, mobile_phone, dns, cookies, collected_at}`。
-4. 平台校验 `X-API-Key`，按 `(channel, shop_name, mobile_phone, dns)` 先查后改写回 `ods_cookie_playwright`：存在则更新 `cookie/str_cookie/headers`，不存在则插入，返回 `{ok, stored, is_new}`。
-5. 面板展示提交结果（新增/更新、条数），采集脚本即可读取新登录态。
+3. 用户点击「抓取 Headers」（可选）：扩展经 `chrome.debugger`（CDP 通道）attach 当前标签页 + `Network.enable`，自动刷新页面，捕获首个同域名 XHR/Fetch 请求的完整请求头（含受保护头，如 Cookie 派生值），面板展示来源 URL 与头数量。
+4. 用户点击提交，扩展 `POST /api/cookies/manual` 携带 `{channel, shop_name, mobile_phone, dns, cookies, headers?, collected_at}`。
+5. 平台校验 `X-API-Key`，按 `(channel, shop_name, mobile_phone, dns)` 先查后改写回 `ods_cookie_playwright`：存在则更新 `cookie/str_cookie/headers`，不存在则插入，返回 `{ok, stored, is_new}`。
+6. 面板展示提交结果（新增/更新、条数），采集脚本即可读取新登录态。
 
 **分支路径：**
 - 测试连接：面板内"测试连接"按钮经 background 调 `GET /api/ping`，展示后端联通结果（可达 / 不可达及原因）。
 - 抓取为空：面板提示未抓到 cookie，提供"刷新页面并重新获取"按钮；点击后刷新当前标签页，延迟后重新抓取。
+- Headers 捕获超时：刷新后未捕获到同域名 XHR/Fetch 请求，给出超时提示，可重试。
 - 提交失败：展示后端错误信息，保留表单内容供重试。
 
 **边界情况：**
@@ -867,7 +869,7 @@
 独立 MV3 Chrome 扩展，供运维/开发人员在自己浏览器一键抓取当前页面 cookie，手动填写业务定位字段，直接写回旧表。与"Cookie 同步助手"（任务驱动）并存。
 
 **行为：**  
-页面内悬浮球（content script 注入，可拖动）点击展开上报面板，自动抓取当前标签页 cookie → 手动填写 channel/shop_name/mobile_phone/dns → 提交 `POST /api/cookies/manual` → 后端按四字段 upsert 写回 `ods_cookie_playwright`。
+页面内悬浮球（content script 注入，可拖动）点击展开上报面板，自动抓取当前标签页 cookie → 可选经 `chrome.debugger`（CDP 通道）捕获当前域名 API 完整请求头（含受保护头）→ 手动填写 channel/shop_name/mobile_phone/dns → 提交 `POST /api/cookies/manual` → 后端按四字段 upsert 写回 `ods_cookie_playwright`。
 
 **规则：**
 - MUST 独立于"Cookie 同步助手"扩展，两者并存；本扩展为手动驱动，无任务轮询、无域名预配置、无 worker_id/采集者概念。
@@ -877,7 +879,10 @@
 - MUST cookie 读取、上报、测试连接均经 background 转发（content script 的 fetch 受页面 CORS 限制，不走 content script 直连）。
 - MUST 手动填写定位字段：channel、dns 必填；shop_name、mobile_phone 可空。
 - MUST 提供"测试连接"：面板内按钮经 background 调 `GET /api/ping`，展示后端联通结果（可达 / 不可达及原因）。
-- MUST 提交调用 `POST /api/cookies/manual`，body：`{channel, shop_name, mobile_phone, dns, cookies, collected_at}`。
+- MUST 支持「抓取 Headers」：面板按钮经 `chrome.debugger`（CDP 通道）attach 当前标签页 + `Network.enable`，自动刷新页面，捕获首个同域名 XHR/Fetch 请求的完整请求头（含受保护头，如 Cookie 派生值）；面板展示来源 URL 与头数量。
+- MUST headers 随上报入库：`POST /api/cookies/manual` body 新增可选 `headers`（object），后端写入旧表 `headers` 列（JSON 字符串）；headers 为空时不写该列。
+- MUST debugger 捕获失败/超时给出明确提示；attach 期间 Chrome 顶部显示调试提示条、F12 受限（README 注明）。
+- MUST 提交调用 `POST /api/cookies/manual`，body：`{channel, shop_name, mobile_phone, dns, cookies, headers?, collected_at}`。
 - MUST 后端按 `(channel, shop_name, mobile_phone, dns)` 先查后改写回旧表（存在更新、不存在插入），复用采集写回逻辑；填 `cookie`（JSON 全量）+ `str_cookie`（`; ` 拼接 name=value），时间戳列存在则维护。
 - MUST NOT 写 `cookie_sync_mapping`；上报不归属任何 worker。
 - MUST 抓取为空时提供"刷新页面并重新获取"：刷新当前标签页后延迟重新抓取。
@@ -894,6 +899,7 @@
 | mobile_phone | string | No | 可空 |
 | dns | string | Yes | 非空 |
 | cookies | object[] | Yes | `chrome.cookies` 原生字段（name/value/domain/path/secure/httpOnly/expirationDate/sameSite），非空 |
+| headers | object | No | 请求头字典（CDP `Network.requestWillBeSentExtraInfo.headers`，含受保护头），可空；空则不写 `headers` 列 |
 | collected_at | string | No | ISO 时间 |
 
 **输出 / 结果：**
@@ -901,9 +907,9 @@
 
 **状态：**
 - 默认：页面右下角显示可移动悬浮球；展开面板显示当前页面抓取结果与表单。
-- 加载：抓取中 / 提交中 / 测试连接中。
-- 空状态：未抓到 cookie 时给出"刷新页面并重新获取"入口。
-- 错误：字段校验失败、提交失败、测试连接失败给出明确错误并保留表单。
+- 加载：抓取中 / 提交中 / 测试连接中 / Headers 捕获中。
+- 空状态：未抓到 cookie 时给出"刷新页面并重新获取"入口；未捕获到请求头时给出"抓取 Headers"入口。
+- 错误：字段校验失败、提交失败、测试连接失败、Headers 捕获失败/超时给出明确错误并保留表单。
 - 成功：展示"新增/更新 N 条 cookie"。
 
 **验收标准：**
@@ -914,6 +920,8 @@
 - [ ] AC-005: Given `COOKIE_SYNC_API_KEY` 已配置, when 无/错 `X-API-Key` 请求 `/api/cookies/manual`, then 返回 401。
 - [ ] AC-006: Given 用户点击"测试连接", when 后端可达, then 面板显示"后端可达"；不可达则显示失败原因。
 - [ ] AC-007: Given 悬浮球遮挡页面操作, when 用户拖动, then 悬浮球移动到新位置并保持。
+- [ ] AC-008: Given 用户点击"抓取 Headers", when 刷新后捕获到同域名 XHR/Fetch 请求, then 面板显示来源 URL 与头数量。
+- [ ] AC-009: Given 上报携带 headers, when 提交, then 旧表 `headers` 列写入 JSON 字符串。
 
 ### AI 能力规格（每个 AI 功能必填）
 

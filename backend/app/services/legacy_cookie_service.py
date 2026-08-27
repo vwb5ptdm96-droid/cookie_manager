@@ -103,7 +103,7 @@ class LegacyCookieService:
             if exists:
                 sets = ["cookie = :cookie", "str_cookie = :str_cookie"]
                 params: dict[str, object] = {"cookie": cookie_json, "str_cookie": str_cookie}
-                if headers is not None:
+                if headers is not None and "headers" in columns:
                     sets.append("headers = :headers")
                     params["headers"] = headers
                 if "update_time" in columns:
@@ -135,7 +135,7 @@ class LegacyCookieService:
             add_col("DNS", "dns", lookup.dns)
             add_col("cookie", "cookie", cookie_json)
             add_col("str_cookie", "str_cookie", str_cookie)
-            if headers is not None:
+            if headers is not None and "headers" in columns:
                 add_col("headers", "headers", headers)
             now_str = beijing_now().strftime("%Y-%m-%d %H:%M:%S")
             if "create_time" in columns:

@@ -1,5 +1,12 @@
 # Product Spec Changelog
 
+## 2026-08-27 · Headers 捕获（chrome.debugger / CDP）
+
+- 新增：REQ-010/SCOPE-017 支持「抓取 Headers」——面板按钮经 `chrome.debugger`（CDP 通道）attach 当前标签页 + `Network.enable`，自动刷新页面，捕获首个同域名 XHR/Fetch 请求的完整请求头（含受保护头，如 Cookie 派生值），面板展示来源 URL 与头数量。
+- 新增：headers 随上报入库——`POST /api/cookies/manual` body 新增可选 `headers`（object），后端写入旧表 `headers` 列（JSON 字符串）；空则不写该列。
+- 新增：AC-008（Headers 捕获）、AC-009（headers 落库）；FLOW-006 主路径/分支补「抓取 Headers」流程与捕获超时。
+- 说明：debugger attach 期间 Chrome 顶部显示调试提示条、F12 受限（自用场景可接受，README 注明）。
+
 ## 2026-08-27 · 一键上报悬浮球交互 + 后端联通测试
 
 - 调整：REQ-010/SCOPE-017 交互入口从「扩展 popup」改为「页面内可移动悬浮球」——content script 向 http/https 页面注入悬浮球、可拖动、点击展开上报面板，无需在扩展栏找图标；cookie 读取/上报/测试连接均经 background 转发（content script 的 fetch 受页面 CORS 限制）。

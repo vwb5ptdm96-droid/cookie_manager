@@ -59,6 +59,7 @@
 10. 采集任务检测与扩展采集闭环（复用健康检测检测逻辑）
 11. 采集模块前端页面（采集任务 / 映射管理 / 扩展接入）
 12. 手动 Cookie 上报扩展（`/api/cookies/manual` 端点 + 独立"Cookie 一键上报"扩展）
+13. Headers 捕获（chrome.debugger / CDP，捕获当前域名 API 完整请求头）
 
 ## 5. 阶段规划
 
@@ -450,6 +451,33 @@
 - 扩展在 Chrome 加载后：http/https 页面出现可拖动悬浮球，点击展开面板自动抓当前页面 cookie、填四字段提交写库；抓取为空时「刷新页面并重新获取」可用；「测试连接」经 background 调 `/api/ping` 正确展示联通结果
 - 后端测试与编译通过（不涉及前端构建）
 
+### Phase 14：Headers 捕获（chrome.debugger / CDP）⏳
+
+**目标**
+
+让「Cookie 一键上报」面板能经 `chrome.debugger`（CDP 通道）捕获当前域名 API 的完整请求头（含受保护头，如 Cookie 派生值），与 cookie 一并上报写入旧表 `headers` 列。
+
+**交付物**
+
+- manifest 新增 `debugger` 权限；扩展版本升 1.2.0
+- background 新增 `captureHeaders` 消息：`chrome.debugger.attach({tabId})` + `Network.enable` → 自动 reload 当前标签页 → 监听 `Network.requestWillBeSent`（记 requestId→type/url）与 `Network.requestWillBeSentExtraInfo`（requestId→headers）→ 捕获首个同域名 XHR/Fetch 请求的完整请求头 → detach → 经 `chrome.tabs.sendMessage` 通知新注入的 content script；捕获超时/失败给明确提示
+- content 面板新增「抓取 Headers」按钮 + 结果展示（来源 URL + 头数量）；上报 body 携带 headers
+- 后端：`CookieSyncManualUpload` 新增可选 `headers: dict`；`handle_manual_upload` 将 headers（JSON 序列化）传入 `upsert_by_lookup` 的 headers 参数
+- 测试：manual 端点 headers 落库用例（headers 列写入 JSON 字符串；空 headers 不写该列）
+
+**关键文件**
+
+- `extension/cookie-quick-upload/manifest.json`、`background.js`、`content.js`
+- `backend/app/schemas/cookie_sync.py`
+- `backend/app/services/cookie_sync_service.py`
+- `backend/app/tests/api/test_cookie_sync_api.py`
+
+**完成标准**
+
+- 面板「抓取 Headers」→ 页面自动刷新 → 捕获同域名 XHR/Fetch 请求头并显示来源 URL 与头数量
+- 上报带 headers → 旧表 `headers` 列写入 JSON 字符串；不抓 headers 时上报不受影响
+- 后端测试与编译通过
+
 ## 6. 数据库表与归属阶段
 
 | 表 / 实体 | 归属阶段 | 说明 |
@@ -492,6 +520,7 @@
    - Phase 11 清理硬编码端口，部署链路全部 `.env` 驱动
    - Phase 12 目录库调试端口 + 打开/关闭调试
 4. **Phase 13（手动 Cookie 上报扩展）**：`POST /api/cookies/manual` 端点 + 独立"Cookie 一键上报"扩展（复用 Phase 7 写回能力，不依赖前端）
-5. 全部通过后做完整联调与发布准备。
+5. **Phase 14（Headers 捕获）**：`chrome.debugger`/CDP 捕获当前域名 API 完整请求头，随上报写入旧表 `headers` 列
+6. 全部通过后做完整联调与发布准备。
 
 > 说明：扩展本体（Chrome 扩展）已在 `D:\公司小疑问\chrome扩展` 联调验证过，平台侧只需实现接收端 API，扩展代码不改（Phase 8 以现有 `background.js` 契约为准；Phase 10 将扩展包纳入仓库便于分发）。

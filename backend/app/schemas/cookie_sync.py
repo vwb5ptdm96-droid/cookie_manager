@@ -41,6 +41,7 @@ class CookieSyncManualUpload(BaseModel):
     mobile_phone: str | None = None
     dns: str = Field(min_length=1)
     cookies: list[dict[str, object]]
+    headers: dict[str, str] | None = None  # 请求头字典（CDP 捕获，含受保护头），空则不写 headers 列
     collected_at: str | None = None  # 契约保留字段（采集时间，暂不落库）
 
 

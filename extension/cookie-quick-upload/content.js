@@ -4,7 +4,7 @@
   if (window.__cquLoaded) return;
   window.__cquLoaded = true;
 
-  const state = { cookies: [], hostname: "", moved: false };
+  const state = { cookies: [], hostname: "", headers: null, moved: false };
 
   const css = `
     #cqu-ball {
@@ -74,7 +74,12 @@
       <label class="cqu-label cqu-req" for="cqu-dns">DNS</label>
       <input id="cqu-dns" placeholder="如 store.weixin.qq.com" />
     </div>
+    <div class="cqu-card">
+      <div class="cqu-row"><span class="cqu-muted">请求头</span><span id="cqu-hdr-count">未捕获</span></div>
+      <div id="cqu-hdr-url" class="cqu-muted" style="word-break:break-all;"></div>
+    </div>
     <div id="cqu-status" class="cqu-muted"></div>
+    <button class="cqu-btn ghost" id="cqu-capture">抓取 Headers（将刷新页面）</button>
     <button class="cqu-btn ghost" id="cqu-test">测试连接</button>
     <button class="cqu-btn" id="cqu-submit">上报入库</button>
     <button class="cqu-btn ghost" id="cqu-refresh">刷新页面并重新获取</button>
@@ -202,6 +207,23 @@
   // ── 面板交互 ──
   el("cqu-close").addEventListener("click", () => { panel.style.display = "none"; });
 
+  el("cqu-capture").addEventListener("click", async () => {
+    const btn = el("cqu-capture");
+    btn.disabled = true;
+    setStatus("正在抓取请求头（页面将自动刷新）...");
+    try {
+      const res = await chrome.runtime.sendMessage({ type: "captureHeaders" });
+      if (!res || !res.ok) {
+        setStatus(res && res.message ? res.message : "启动捕获失败", "fail");
+        btn.disabled = false;
+      }
+      // 成功时页面刷新、content script 重建，结果由 background 的 headersCaptured 消息带回
+    } catch (err) {
+      setStatus(`启动捕获失败：${err.message}`, "fail");
+      btn.disabled = false;
+    }
+  });
+
   el("cqu-test").addEventListener("click", async () => {
     setStatus("测试后端连接中...");
     const btn = el("cqu-test");
@@ -236,6 +258,7 @@
         mobilePhone,
         dns,
         cookies: state.cookies,
+        headers: state.headers || null,
       });
       if (!res || !res.ok) {
         setStatus(res && res.message ? res.message : "提交失败", "fail");
@@ -263,6 +286,35 @@
   el("cqu-options").addEventListener("click", () => {
     chrome.runtime.sendMessage({ type: "openOptionsPage" }).catch(() => { /* 忽略 */ });
   });
+
+  // 应用 Headers 捕获结果：捕获触发页面刷新，自动展开面板让用户看到结果
+  function applyHeaders(payload) {
+    if (payload.ok && payload.headers) {
+      state.headers = payload.headers;
+      el("cqu-hdr-count").textContent = `${Object.keys(payload.headers).length} 个请求头`;
+      el("cqu-hdr-url").textContent = `来自：${payload.url || ""}`;
+      panel.style.display = "block";
+      setStatus("已捕获请求头", "ok");
+    } else {
+      state.headers = null;
+      el("cqu-hdr-count").textContent = "捕获失败";
+      setStatus(payload.error || "捕获失败", "fail");
+    }
+  }
+
+  // 接收 background 的 Headers 捕获结果（页面刷新后本实例为新注入的 content script）
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg && msg.type === "headersCaptured") {
+      applyHeaders(msg);
+    }
+  });
+
+  // 兜底：捕获完成但本实例注入晚于 sendMessage 投递时，经 background 代读 storage.session 消费
+  chrome.runtime.sendMessage({ type: "getCapturedHeaders" }).then((res) => {
+    if (res && res.ok && res.found) {
+      applyHeaders(res);
+    }
+  }).catch(() => { /* 忽略 */ });
 
   // 刷新后自动恢复：用户点过「刷新页面并重新获取」时，本 tab 重新注入后自动展开面板并抓取
   chrome.runtime.sendMessage({ type: "checkRefreshPending" }).then((res) => {
