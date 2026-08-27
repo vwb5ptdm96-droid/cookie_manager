@@ -416,7 +416,7 @@
 - 锁定目录点「打开调试」前端置灰、后端返回 `DIRECTORY_LOCKED`
 - 「关闭调试」清理对应 Chrome；后端测试与前端 `npm run build` 通过
 
-### Phase 13：手动 Cookie 上报扩展 ⏳
+### Phase 13：手动 Cookie 上报扩展 ✅
 
 **目标**
 
