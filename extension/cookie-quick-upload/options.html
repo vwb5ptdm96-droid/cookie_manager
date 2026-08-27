@@ -48,7 +48,7 @@
 
   <label for="backendUrl">后端地址</label>
   <input id="backendUrl" placeholder="http://127.0.0.1:8081" />
-  <p class="muted">平台后端地址（自动去尾斜杠），与后端 `.env` 的 APP_PORT 一致。非本机的 http 地址会被拦截，请用 https 或本机地址。</p>
+  <p class="muted">平台后端地址（自动去尾斜杠），与后端 `.env` 的 APP_PORT 一致。非本机且非内网的 http 地址会被拦截，请用 https、本机或内网地址。</p>
 
   <label for="apiKey">API Key（可选）</label>
   <input id="apiKey" type="password" placeholder="与后端 COOKIE_SYNC_API_KEY 一致" />
