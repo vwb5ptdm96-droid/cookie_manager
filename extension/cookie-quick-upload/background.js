@@ -182,7 +182,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             try { await chrome.debugger.detach({ tabId: captureState.tabId }); } catch (_) { /* 忽略 */ }
           }
           resetCapture();
+          // 清掉旧捕获结果与刷新恢复标志，避免新注入实例重复触发
           chrome.storage.session.remove(CAPTURED_KEY).catch(() => {});
+          chrome.storage.session.remove(REFRESH_TAB_KEY).catch(() => {});
           let hostname = "";
           try {
             hostname = sender.tab && sender.tab.url ? new URL(sender.tab.url).hostname : "";

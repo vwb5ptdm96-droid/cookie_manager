@@ -1,5 +1,10 @@
 # Product Spec Changelog
 
+## 2026-08-27 · 抓取合并：Cookie + Headers 一键同时获取
+
+- 修复：REQ-010「抓取 Headers」触发刷新后未重新抓 cookie，导致上报时无 Cookie（headers 路径与刷新路径各做半件事）。改为一次点击同时抓取 cookie 与请求头——headers 捕获完成/失败均重新抓取当前页面 cookie；按钮改为「抓取 Cookie + Headers（将刷新页面）」。
+- 调整：FLOW-006 主路径第 3 步、REQ-010 规则、AC-008 描述同步为「同时抓取 cookie 与请求头」。
+
 ## 2026-08-27 · Headers 捕获（chrome.debugger / CDP）
 
 - 新增：REQ-010/SCOPE-017 支持「抓取 Headers」——面板按钮经 `chrome.debugger`（CDP 通道）attach 当前标签页 + `Network.enable`，自动刷新页面，捕获首个同域名 XHR/Fetch 请求的完整请求头（含受保护头，如 Cookie 派生值），面板展示来源 URL 与头数量。

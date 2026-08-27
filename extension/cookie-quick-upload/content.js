@@ -79,7 +79,7 @@
       <div id="cqu-hdr-url" class="cqu-muted" style="word-break:break-all;"></div>
     </div>
     <div id="cqu-status" class="cqu-muted"></div>
-    <button class="cqu-btn ghost" id="cqu-capture">抓取 Headers（将刷新页面）</button>
+    <button class="cqu-btn ghost" id="cqu-capture">抓取 Cookie + Headers（将刷新页面）</button>
     <button class="cqu-btn ghost" id="cqu-test">测试连接</button>
     <button class="cqu-btn" id="cqu-submit">上报入库</button>
     <button class="cqu-btn ghost" id="cqu-refresh">刷新页面并重新获取</button>
@@ -287,7 +287,8 @@
     chrome.runtime.sendMessage({ type: "openOptionsPage" }).catch(() => { /* 忽略 */ });
   });
 
-  // 应用 Headers 捕获结果：捕获触发页面刷新，自动展开面板让用户看到结果
+  // 应用捕获结果：captureHeaders 触发页面刷新后，一并重新抓取当前页面 cookie，
+  // 保证「一个按钮同时拿 cookie + headers」；headers 捕获失败也抓 cookie，可只上报 cookie。
   function applyHeaders(payload) {
     if (payload.ok && payload.headers) {
       state.headers = payload.headers;
@@ -300,6 +301,7 @@
       el("cqu-hdr-count").textContent = "捕获失败";
       setStatus(payload.error || "捕获失败", "fail");
     }
+    refreshCookies();
   }
 
   // 接收 background 的 Headers 捕获结果（页面刷新后本实例为新注入的 content script）

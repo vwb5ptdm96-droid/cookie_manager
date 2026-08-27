@@ -26,7 +26,7 @@
    - DNS（必填，默认预填当前域名，可改）
 4. 点 **上报入库** → 后端按 `(channel, shop_name, mobile_phone, dns)` 先查后改写入 `ods_cookie_playwright`：已存在则覆盖更新、不存在则新增，面板提示「新增/更新 N 条 Cookie」
 
-> 可先点 **抓取 Headers**：扩展经 `chrome.debugger`（CDP 通道）attach 当前标签页，自动刷新页面，捕获**首个与当前页面同 hostname 的 XHR/Fetch 请求的完整请求头**（含 Cookie 派生等受保护头，普通扩展 API 拿不到），随上报一并写入旧表 `headers` 列。attach 期间 Chrome 顶部会显示调试提示条、F12 不可用，属 CDP 调试的已知限制。刷新后若页面未发起同 hostname 的 XHR/Fetch，会捕获超时，可重试。
+> 可先点 **抓取 Cookie + Headers**：扩展经 `chrome.debugger`（CDP 通道）attach 当前标签页，自动刷新页面，**同时抓取当前页面 cookie 与首个同 hostname 的 XHR/Fetch 请求的完整请求头**（含 Cookie 派生等受保护头，普通扩展 API 拿不到），随上报一并写入旧表 `headers` 列。attach 期间 Chrome 顶部会显示调试提示条、F12 不可用，属 CDP 调试的已知限制。刷新后若页面未发起同 hostname 的 XHR/Fetch，headers 会捕获超时（cookie 仍保留可上报），可重试。
 
 ## 三、测试后端连接
 

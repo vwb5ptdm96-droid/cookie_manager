@@ -247,7 +247,7 @@
 **主路径：**
 1. 页面内悬浮球（content script 注入，可拖动）点击展开上报面板，自动读取当前标签页 URL，`chrome.cookies.getAll({url})` 抓取当前页面相关 cookie（经 background 转发）。
 2. 面板展示抓取到的 cookie 数量（脱敏），用户手动填写定位字段：channel（必填）、shop_name（可空）、mobile_phone（可空）、dns（必填）。
-3. 用户点击「抓取 Headers」（可选）：扩展经 `chrome.debugger`（CDP 通道）attach 当前标签页 + `Network.enable`，自动刷新页面，捕获首个同域名 XHR/Fetch 请求的完整请求头（含受保护头，如 Cookie 派生值），面板展示来源 URL 与头数量。
+3. 用户点击「抓取 Cookie + Headers」（可选）：扩展经 `chrome.debugger`（CDP 通道）attach 当前标签页 + `Network.enable`，自动刷新页面，捕获首个同域名 XHR/Fetch 请求的完整请求头（含受保护头，如 Cookie 派生值），并同时重新抓取当前页面 cookie；面板展示来源 URL、头数量与 cookie 数量。
 4. 用户点击提交，扩展 `POST /api/cookies/manual` 携带 `{channel, shop_name, mobile_phone, dns, cookies, headers?, collected_at}`。
 5. 平台校验 `X-API-Key`，按 `(channel, shop_name, mobile_phone, dns)` 先查后改写回 `ods_cookie_playwright`：存在则更新 `cookie/str_cookie/headers`，不存在则插入，返回 `{ok, stored, is_new}`。
 6. 面板展示提交结果（新增/更新、条数），采集脚本即可读取新登录态。
@@ -879,7 +879,7 @@
 - MUST cookie 读取、上报、测试连接均经 background 转发（content script 的 fetch 受页面 CORS 限制，不走 content script 直连）。
 - MUST 手动填写定位字段：channel、dns 必填；shop_name、mobile_phone 可空。
 - MUST 提供"测试连接"：面板内按钮经 background 调 `GET /api/ping`，展示后端联通结果（可达 / 不可达及原因）。
-- MUST 支持「抓取 Headers」：面板按钮经 `chrome.debugger`（CDP 通道）attach 当前标签页 + `Network.enable`，自动刷新页面，捕获首个同域名 XHR/Fetch 请求的完整请求头（含受保护头，如 Cookie 派生值）；面板展示来源 URL 与头数量。
+- MUST 支持「抓取 Cookie + Headers」：面板按钮经 `chrome.debugger`（CDP 通道）attach 当前标签页 + `Network.enable`，自动刷新页面，捕获首个同域名 XHR/Fetch 请求的完整请求头（含受保护头，如 Cookie 派生值），并同时重新抓取当前页面 cookie；一次点击同时获得 cookie 与请求头，headers 捕获失败时仍保留 cookie 可上报。
 - MUST headers 随上报入库：`POST /api/cookies/manual` body 新增可选 `headers`（object），后端写入旧表 `headers` 列（JSON 字符串）；headers 为空时不写该列。
 - MUST debugger 捕获失败/超时给出明确提示；attach 期间 Chrome 顶部显示调试提示条、F12 受限（README 注明）。
 - MUST 提交调用 `POST /api/cookies/manual`，body：`{channel, shop_name, mobile_phone, dns, cookies, headers?, collected_at}`。
@@ -920,7 +920,7 @@
 - [ ] AC-005: Given `COOKIE_SYNC_API_KEY` 已配置, when 无/错 `X-API-Key` 请求 `/api/cookies/manual`, then 返回 401。
 - [ ] AC-006: Given 用户点击"测试连接", when 后端可达, then 面板显示"后端可达"；不可达则显示失败原因。
 - [ ] AC-007: Given 悬浮球遮挡页面操作, when 用户拖动, then 悬浮球移动到新位置并保持。
-- [ ] AC-008: Given 用户点击"抓取 Headers", when 刷新后捕获到同域名 XHR/Fetch 请求, then 面板显示来源 URL 与头数量。
+- [ ] AC-008: Given 用户点击"抓取 Cookie + Headers", when 刷新后捕获到同域名 XHR/Fetch 请求, then 面板显示来源 URL 与头数量，并同时重新抓取当前页面 cookie。
 - [ ] AC-009: Given 上报携带 headers, when 提交, then 旧表 `headers` 列写入 JSON 字符串。
 
 ### AI 能力规格（每个 AI 功能必填）
