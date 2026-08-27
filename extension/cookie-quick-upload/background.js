@@ -10,7 +10,7 @@ const REFRESH_TAB_KEY = "cquRefreshTabId";
 // debugger 走 CDP 通道，能拿到完整请求头（含 Cookie 派生等受保护头，扩展 webRequest 拿不到）。
 const CAPTURE_TIMEOUT_MS = 15000;
 const CAPTURED_KEY = "cquCapturedHeaders";
-const captureState = { tabId: null, hostname: "", requests: {}, pendingHeaders: {}, timer: null };
+const captureState = { tabId: null, hostname: "", filter: "", requests: {}, pendingHeaders: {}, timer: null };
 
 function sameHost(url, hostname) {
   try { return new URL(url).hostname === hostname; } catch (_) { return false; }
@@ -20,16 +20,24 @@ function resetCapture() {
   clearTimeout(captureState.timer);
   captureState.tabId = null;
   captureState.hostname = "";
+  captureState.filter = "";
   captureState.requests = {};
   captureState.pendingHeaders = {};
   captureState.timer = null;
 }
 
+function hasHeader(headers, name) {
+  const target = name.toLowerCase();
+  return Object.keys(headers).some((k) => k.toLowerCase() === target);
+}
+
 function matchesTarget(meta) {
   if (meta.type !== "XHR" && meta.type !== "Fetch") return false;
   if (!meta.headers) return false;
-  if (!captureState.hostname) return true; // 无 hostname 时不过滤（防御）
-  return sameHost(meta.url, captureState.hostname);
+  if (captureState.hostname && !sameHost(meta.url, captureState.hostname)) return false;
+  // 可选 Headers 属性过滤：请求头必须存在同名键（精确匹配、大小写不敏感）
+  if (captureState.filter && !hasHeader(meta.headers, captureState.filter)) return false;
+  return true;
 }
 
 function finishCapture(payload) {
@@ -204,10 +212,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           }
           captureState.tabId = tabId;
           captureState.hostname = hostname;
+          captureState.filter = (msg.filter || "").trim();
           captureState.requests = {};
           captureState.pendingHeaders = {};
+          const filterDesc = captureState.filter ? `且请求头含「${captureState.filter}」` : "";
           captureState.timer = setTimeout(() => {
-            finishCapture({ ok: false, error: "捕获超时：刷新后未捕获到同域名 XHR/Fetch 请求（仅匹配同 hostname）" });
+            finishCapture({ ok: false, error: `捕获超时：刷新后未捕获到同域名 XHR/Fetch 请求（仅匹配同 hostname${filterDesc}）` });
           }, CAPTURE_TIMEOUT_MS);
           // 自动刷新页面触发请求；debugger 跨 reload 保持 attach
           await chrome.tabs.reload(tabId);

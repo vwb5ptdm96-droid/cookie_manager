@@ -1,5 +1,11 @@
 # Product Spec Changelog
 
+## 2026-08-27 · Headers 属性过滤（扩展抓取精确定位关键请求）
+
+- 新增：手动上报扩展「抓取 Cookie + Headers」支持「Headers 属性」过滤——面板提供可下拉的属性名输入框（预置 `token`，可手输），填了则捕获规则从「首个同域名请求」升级为「同域名且请求头存在同名键（精确匹配、大小写不敏感）」的请求；不填维持原行为。
+- 边界：过滤仅作用于 headers 捕获阶段，cookie 仍抓当前页面全量；过滤条件不随上报入库（`POST /api/cookies/manual` body 不变）。
+- 新增：FLOW-006 主路径/分支补过滤流程与超时提示（含过滤条件说明）；REQ-010 规则补「Headers 属性」MUST；输入表补 `headers_filter`（面板参数，不入库）；AC-010（填属性时精确捕获/无匹配超时）、AC-011（留空维持原行为）。
+
 ## 2026-08-27 · 抓取合并：Cookie + Headers 一键同时获取
 
 - 修复：REQ-010「抓取 Headers」触发刷新后未重新抓 cookie，导致上报时无 Cookie（headers 路径与刷新路径各做半件事）。改为一次点击同时抓取 cookie 与请求头——headers 捕获完成/失败均重新抓取当前页面 cookie；按钮改为「抓取 Cookie + Headers（将刷新页面）」。

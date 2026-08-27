@@ -77,6 +77,11 @@
     <div class="cqu-card">
       <div class="cqu-row"><span class="cqu-muted">请求头</span><span id="cqu-hdr-count">未捕获</span></div>
       <div id="cqu-hdr-url" class="cqu-muted" style="word-break:break-all;"></div>
+      <label class="cqu-label" for="cqu-hdr-filter">Headers 属性（可选）</label>
+      <input id="cqu-hdr-filter" list="cqu-hdr-filter-options" placeholder="如 token，留空不过滤" />
+      <datalist id="cqu-hdr-filter-options">
+        <option value="token"></option>
+      </datalist>
     </div>
     <div id="cqu-status" class="cqu-muted"></div>
     <button class="cqu-btn ghost" id="cqu-capture">抓取 Cookie + Headers（将刷新页面）</button>
@@ -209,10 +214,11 @@
 
   el("cqu-capture").addEventListener("click", async () => {
     const btn = el("cqu-capture");
+    const filter = el("cqu-hdr-filter").value.trim();
     btn.disabled = true;
-    setStatus("正在抓取请求头（页面将自动刷新）...");
+    setStatus(filter ? `正在抓取请求头（页面将自动刷新，Headers 属性「${filter}」）...` : "正在抓取请求头（页面将自动刷新）...");
     try {
-      const res = await chrome.runtime.sendMessage({ type: "captureHeaders" });
+      const res = await chrome.runtime.sendMessage({ type: "captureHeaders", filter });
       if (!res || !res.ok) {
         setStatus(res && res.message ? res.message : "启动捕获失败", "fail");
         btn.disabled = false;

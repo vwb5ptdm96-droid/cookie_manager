@@ -461,6 +461,8 @@
 
 - manifest 新增 `debugger` 权限；扩展版本升 1.2.0
 - background 新增 `captureHeaders` 消息：`chrome.debugger.attach({tabId})` + `Network.enable` → 自动 reload 当前标签页 → 监听 `Network.requestWillBeSent`（记 requestId→type/url）与 `Network.requestWillBeSentExtraInfo`（requestId→headers）→ 捕获首个同域名 XHR/Fetch 请求的完整请求头 → detach → 经 `chrome.tabs.sendMessage` 通知新注入的 content script；捕获超时/失败给明确提示
+- background 支持可选 `headers_filter`（captureHeaders 消息参数）：非空时捕获规则升级为「同域名且请求头存在同名键（精确匹配、大小写不敏感）」，超时提示包含过滤条件
+- content 面板新增「Headers 属性」下拉式输入框（`<datalist>` 预置 `token`，可手输），抓取时随 `captureHeaders` 传递；留空不过滤，cookie 仍抓页面全量
 - content 面板新增「抓取 Headers」按钮 + 结果展示（来源 URL + 头数量）；上报 body 携带 headers
 - 后端：`CookieSyncManualUpload` 新增可选 `headers: dict`；`handle_manual_upload` 将 headers（JSON 序列化）传入 `upsert_by_lookup` 的 headers 参数
 - 测试：manual 端点 headers 落库用例（headers 列写入 JSON 字符串；空 headers 不写该列）
@@ -475,6 +477,7 @@
 **完成标准**
 
 - 面板「抓取 Headers」→ 页面自动刷新 → 捕获同域名 XHR/Fetch 请求头并显示来源 URL 与头数量
+- 面板填「Headers 属性」后抓取仅捕获请求头含同名键（精确、大小写不敏感）的请求；留空维持捕获首个同域名请求
 - 上报带 headers → 旧表 `headers` 列写入 JSON 字符串；不抓 headers 时上报不受影响
 - 后端测试与编译通过
 
