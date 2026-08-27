@@ -64,7 +64,7 @@
 | SCOPE-014 | 采集 cookie 写回旧表 | P0 | 先查后改写回 `ods_cookie_playwright`，填 `cookie` + `str_cookie` |
 | SCOPE-015 | 部署配置可移植化 | P0 | 启动链路全部从 `.env` 读取（端口/路径/Chrome 路径），清理硬编码端口与盘符，部署机无 E 盘、默认端口被占时改 `.env` 即可启动 |
 | SCOPE-016 | 目录库 CDP 调试功能 | P0 | 目录库每目录存默认调试端口；可一键拉起/关闭带该目录（`--user-data-dir`）的可见 Chrome，CDP 端口供外部脚本连接调试；Chrome 路径走 `CHROME_PATH` |
-| SCOPE-017 | 手动 Cookie 上报扩展 | P0 | 独立 MV3 Chrome 扩展「Cookie 一键上报」，一键抓取当前页面 cookie，手动填写 `channel/shop_name/mobile_phone/dns` 写回 `ods_cookie_playwright`；不经映射表、无采集者概念；重复上传按四字段 upsert；没抓到 cookie 时支持刷新当前页面重抓；纯粹独立、不挂平台前端 |
+| SCOPE-017 | 手动 Cookie 上报扩展 | P0 | 独立 MV3 Chrome 扩展「Cookie 一键上报」，以页面内可移动悬浮球为主入口，一键抓取当前页面 cookie，手动填写 `channel/shop_name/mobile_phone/dns` 写回 `ods_cookie_playwright`；不经映射表、无采集者概念；重复上传按四字段 upsert；没抓到 cookie 时支持刷新当前页面重抓；内置后端联通测试；纯粹独立、不挂平台前端 |
 
 ### 2.2 不在本版本范围
 
@@ -242,17 +242,18 @@
 **目标：** 让用户在自己浏览器打开已登录的店铺页面后，一键抓取当前页面 cookie，手动填写定位字段，直接写回旧表。无需任务调度、映射表、同事协同或预配置域名。
 
 **入口：**  
-用户打开目标页面（已登录）→ 点击扩展图标。
+用户打开目标页面（已登录）→ 页面右下角出现可移动悬浮球 → 点击展开上报面板。
 
 **主路径：**
-1. 扩展 popup 打开时自动读取当前标签页 URL，`chrome.cookies.getAll({url})` 抓取当前页面相关 cookie。
-2. popup 展示抓取到的 cookie 数量（脱敏），用户手动填写定位字段：channel（必填）、shop_name（可空）、mobile_phone（可空）、dns（必填）。
+1. 页面内悬浮球（content script 注入，可拖动）点击展开上报面板，自动读取当前标签页 URL，`chrome.cookies.getAll({url})` 抓取当前页面相关 cookie（经 background 转发）。
+2. 面板展示抓取到的 cookie 数量（脱敏），用户手动填写定位字段：channel（必填）、shop_name（可空）、mobile_phone（可空）、dns（必填）。
 3. 用户点击提交，扩展 `POST /api/cookies/manual` 携带 `{channel, shop_name, mobile_phone, dns, cookies, collected_at}`。
 4. 平台校验 `X-API-Key`，按 `(channel, shop_name, mobile_phone, dns)` 先查后改写回 `ods_cookie_playwright`：存在则更新 `cookie/str_cookie/headers`，不存在则插入，返回 `{ok, stored, is_new}`。
-5. popup 展示提交结果（新增/更新、条数），采集脚本即可读取新登录态。
+5. 面板展示提交结果（新增/更新、条数），采集脚本即可读取新登录态。
 
 **分支路径：**
-- 抓取为空：popup 提示未抓到 cookie，提供"刷新页面并重新获取"按钮；点击后刷新当前标签页，延迟后重新抓取。
+- 测试连接：面板内"测试连接"按钮经 background 调 `GET /api/ping`，展示后端联通结果（可达 / 不可达及原因）。
+- 抓取为空：面板提示未抓到 cookie，提供"刷新页面并重新获取"按钮；点击后刷新当前标签页，延迟后重新抓取。
 - 提交失败：展示后端错误信息，保留表单内容供重试。
 
 **边界情况：**
@@ -866,18 +867,21 @@
 独立 MV3 Chrome 扩展，供运维/开发人员在自己浏览器一键抓取当前页面 cookie，手动填写业务定位字段，直接写回旧表。与"Cookie 同步助手"（任务驱动）并存。
 
 **行为：**  
-扩展 popup 打开时自动抓取当前标签页 cookie → 手动填写 channel/shop_name/mobile_phone/dns → 提交 `POST /api/cookies/manual` → 后端按四字段 upsert 写回 `ods_cookie_playwright`。
+页面内悬浮球（content script 注入，可拖动）点击展开上报面板，自动抓取当前标签页 cookie → 手动填写 channel/shop_name/mobile_phone/dns → 提交 `POST /api/cookies/manual` → 后端按四字段 upsert 写回 `ods_cookie_playwright`。
 
 **规则：**
 - MUST 独立于"Cookie 同步助手"扩展，两者并存；本扩展为手动驱动，无任务轮询、无域名预配置、无 worker_id/采集者概念。
 - MUST NOT 依赖平台前端：后端地址与 `X-API-Key` 在扩展自身 options 页维护；平台前端不展示本扩展接入信息。
-- MUST popup 打开时自动读取当前标签页 URL，`chrome.cookies.getAll({url})` 抓取当前页面相关 cookie；域名从当前 URL 取，不手填。
+- MUST 以页面内可移动悬浮球为主入口：content script 向 http/https 页面注入悬浮球，可拖动、不遮挡页面操作；点击展开上报面板，无需在扩展栏找图标。
+- MUST 悬浮球展开时自动读取当前标签页 URL，`chrome.cookies.getAll({url})` 抓取当前页面相关 cookie；域名从当前 URL 取，不手填。
+- MUST cookie 读取、上报、测试连接均经 background 转发（content script 的 fetch 受页面 CORS 限制，不走 content script 直连）。
 - MUST 手动填写定位字段：channel、dns 必填；shop_name、mobile_phone 可空。
+- MUST 提供"测试连接"：面板内按钮经 background 调 `GET /api/ping`，展示后端联通结果（可达 / 不可达及原因）。
 - MUST 提交调用 `POST /api/cookies/manual`，body：`{channel, shop_name, mobile_phone, dns, cookies, collected_at}`。
 - MUST 后端按 `(channel, shop_name, mobile_phone, dns)` 先查后改写回旧表（存在更新、不存在插入），复用采集写回逻辑；填 `cookie`（JSON 全量）+ `str_cookie`（`; ` 拼接 name=value），时间戳列存在则维护。
 - MUST NOT 写 `cookie_sync_mapping`；上报不归属任何 worker。
 - MUST 抓取为空时提供"刷新页面并重新获取"：刷新当前标签页后延迟重新抓取。
-- MUST popup 内脱敏展示 cookie（不展示 value）；提交时 cookies 经 HTTPS 传输，日志不得明文记录 cookie 值。
+- MUST 面板内脱敏展示 cookie（不展示 value）；提交时 cookies 经 HTTPS 传输，日志不得明文记录 cookie 值。
 - MUST 接口校验 `X-API-Key`（`COOKIE_SYNC_API_KEY` 留空时关闭鉴权，仅限本地联调）。
 
 **输入：**
@@ -896,18 +900,20 @@
 - 旧表按定位键 upsert 成功，采集脚本可立即读取新登录态。
 
 **状态：**
-- 默认：显示当前页面抓取结果与表单。
-- 加载：抓取中 / 提交中。
+- 默认：页面右下角显示可移动悬浮球；展开面板显示当前页面抓取结果与表单。
+- 加载：抓取中 / 提交中 / 测试连接中。
 - 空状态：未抓到 cookie 时给出"刷新页面并重新获取"入口。
-- 错误：字段校验失败、提交失败给出明确错误并保留表单。
+- 错误：字段校验失败、提交失败、测试连接失败给出明确错误并保留表单。
 - 成功：展示"新增/更新 N 条 cookie"。
 
 **验收标准：**
-- [ ] AC-001: Given 用户打开已登录页面点击扩展, when popup 打开, then 自动抓取当前页面 cookie 并展示数量（脱敏）。
+- [ ] AC-001: Given 用户打开已登录页面, when 页面加载, then 出现可移动悬浮球；点击展开面板并自动抓取当前页面 cookie 展示数量（脱敏）。
 - [ ] AC-002: Given 用户填写定位字段并提交, when 该 `(channel, shop_name, mobile_phone, dns)` 已存在旧表, then 覆盖更新该记录并提示更新。
 - [ ] AC-003: Given 用户填写定位字段并提交, when 该定位键不存在, then 新增记录并提示新增。
 - [ ] AC-004: Given 抓取为空, when 用户点击"刷新页面并重新获取", then 当前标签页刷新并重新抓取 cookie。
 - [ ] AC-005: Given `COOKIE_SYNC_API_KEY` 已配置, when 无/错 `X-API-Key` 请求 `/api/cookies/manual`, then 返回 401。
+- [ ] AC-006: Given 用户点击"测试连接", when 后端可达, then 面板显示"后端可达"；不可达则显示失败原因。
+- [ ] AC-007: Given 悬浮球遮挡页面操作, when 用户拖动, then 悬浮球移动到新位置并保持。
 
 ### AI 能力规格（每个 AI 功能必填）
 

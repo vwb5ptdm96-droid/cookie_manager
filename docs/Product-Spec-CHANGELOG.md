@@ -1,5 +1,11 @@
 # Product Spec Changelog
 
+## 2026-08-27 · 一键上报悬浮球交互 + 后端联通测试
+
+- 调整：REQ-010/SCOPE-017 交互入口从「扩展 popup」改为「页面内可移动悬浮球」——content script 向 http/https 页面注入悬浮球、可拖动、点击展开上报面板，无需在扩展栏找图标；cookie 读取/上报/测试连接均经 background 转发（content script 的 fetch 受页面 CORS 限制）。
+- 新增：后端联通测试——面板内「测试连接」按钮经 background 调 `GET /api/ping`，展示后端可达/不可达及原因。
+- 调整：FLOW-006 入口与主路径、REQ-010 行为/规则/状态/验收标准；新增 AC-006（测试连接）、AC-007（悬浮球拖动）；AC-001 改为悬浮球展开自动抓取。
+
 ## 2026-08-27 · 手动 Cookie 上报扩展
 
 - 新增：SCOPE-017 手动 Cookie 上报扩展——独立 MV3 Chrome 扩展，一键抓取当前页面 cookie，手动填写 channel/shop_name/mobile_phone/dns 写回 `ods_cookie_playwright`；不经映射表、无采集者概念；重复上传按四字段 upsert（存在更新、不存在插入）；没抓到 cookie 时支持刷新当前页面重抓。

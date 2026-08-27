@@ -26,6 +26,10 @@ $("saveBtn").addEventListener("click", async () => {
     setStatus("❌ 后端地址格式不合法", "fail");
     return;
   }
+  if (!["http:", "https:"].includes(url.protocol)) {
+    setStatus("❌ 仅支持 http/https 后端地址", "fail");
+    return;
+  }
   if (url.protocol === "http:" && !["localhost", "127.0.0.1"].includes(url.hostname)) {
     setStatus("⚠️ 非本机的 http 地址会让 Cookie 明文过网，请用 https 或本机地址", "fail");
     return;

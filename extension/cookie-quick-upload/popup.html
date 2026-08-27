@@ -5,53 +5,28 @@
   <title>Cookie 一键上报</title>
   <style>
     body {
-      width: 320px;
+      width: 280px;
       font-family: "Microsoft YaHei", system-ui, sans-serif;
       margin: 0;
       padding: 14px;
       background: #fafafa;
       color: #222;
     }
-    h1 {
-      font-size: 15px;
-      margin: 0 0 10px;
-    }
+    h1 { font-size: 15px; margin: 0 0 10px; }
     .card {
       background: #fff;
       border: 1px solid #e5e5e5;
       border-radius: 8px;
       padding: 10px 12px;
       font-size: 12px;
-      line-height: 1.7;
+      line-height: 1.8;
       margin-bottom: 10px;
     }
-    .summary {
-      display: flex;
-      justify-content: space-between;
-    }
-    label {
-      display: block;
-      font-size: 12px;
-      margin: 8px 0 4px;
-      color: #555;
-    }
-    input {
-      width: 100%;
-      box-sizing: border-box;
-      padding: 6px 8px;
-      border: 1px solid #d0d0d0;
-      border-radius: 6px;
-      font-size: 13px;
-    }
-    .req::after {
-      content: " *";
-      color: #cf222e;
-    }
+    .muted { color: #888; }
     .btn {
       display: block;
       width: 100%;
-      padding: 9px;
-      margin-top: 10px;
+      padding: 8px;
       border: none;
       border-radius: 6px;
       font-size: 13px;
@@ -60,75 +35,17 @@
       color: #fff;
     }
     .btn:hover { background: #1d4ed8; }
-    .btn.ghost {
-      background: #fff;
-      color: #2563eb;
-      border: 1px solid #2563eb;
-    }
-    .muted { color: #888; }
-    .ok { color: #1a7f37; }
-    .fail { color: #cf222e; }
-    #statusLine {
-      font-size: 12px;
-      min-height: 16px;
-      margin: 8px 0 0;
-      word-break: break-all;
-    }
-    #cookieList {
-      margin-top: 6px;
-      max-height: 130px;
-      overflow-y: auto;
-      font-size: 12px;
-      color: #444;
-    }
-    .cookie-row {
-      display: flex;
-      justify-content: space-between;
-      border-top: 1px dashed #eee;
-      padding: 2px 0;
-    }
-    .cookie-name {
-      max-width: 190px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .empty {
-      color: #888;
-      text-align: center;
-      padding: 6px 0;
-    }
   </style>
 </head>
 <body>
   <h1>🍪 Cookie 一键上报</h1>
-
   <div class="card">
-    <div class="summary">
-      <span class="muted">当前页面</span><span id="pageDomain">-</span>
-    </div>
-    <div class="summary">
-      <span class="muted">抓到 Cookie</span><span id="cookieCount">-</span>
-    </div>
-    <div id="cookieList"></div>
+    <p class="muted" style="margin:0">
+      已加载悬浮球：打开任意已登录页面，点击右下角 <b>🍪</b> 悬浮球即可抓取上报。
+      悬浮球可拖动到任意位置。
+    </p>
   </div>
-
-  <div class="card">
-    <label class="req" for="channel">渠道 channel</label>
-    <input id="channel" placeholder="如 WEIXIN / TAOBAO" />
-    <label for="shopName">店铺 shop_name</label>
-    <input id="shopName" placeholder="可空" />
-    <label for="mobilePhone">手机号 mobile_phone</label>
-    <input id="mobilePhone" placeholder="可空" />
-    <label class="req" for="dns">DNS</label>
-    <input id="dns" placeholder="如 store.weixin.qq.com" />
-  </div>
-
-  <div id="statusLine"></div>
-  <button class="btn" id="submitBtn">上报入库</button>
-  <button class="btn ghost" id="refreshBtn">刷新页面并重新获取</button>
-  <button class="btn ghost" id="optionsBtn">设置</button>
-
+  <button class="btn" id="optionsBtn">打开设置</button>
   <script src="popup.js"></script>
 </body>
 </html>

@@ -1,14 +1,30 @@
 {
   "manifest_version": 3,
   "name": "Cookie 一键上报",
-  "version": "1.0.0",
-  "description": "一键抓取当前页面 Cookie，手动填写渠道/店铺/手机号/DNS 上报入库，供采集脚本使用。",
+  "version": "1.1.0",
+  "minimum_chrome_version": "102",
+  "description": "页面内可移动悬浮球，一键抓取当前页面 Cookie，手动填写渠道/店铺/手机号/DNS 上报入库。",
   "permissions": [
     "cookies",
     "storage"
   ],
   "host_permissions": [
     "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
   ],
   "action": {
     "default_popup": "popup.html",

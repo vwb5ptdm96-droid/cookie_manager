@@ -426,27 +426,28 @@
 
 - 后端新增 `POST /api/cookies/manual` 端点：body `{channel, shop_name, mobile_phone, dns, cookies, collected_at}` → `{ok, stored, is_new}`；复用 `legacy_cookie_service.upsert_by_lookup` 按四字段先查后改（存在更新、不存在插入，填 `cookie` JSON + `str_cookie` 拼接串）；沿用 `X-API-Key` 鉴权（非 ping 接口）
 - 新增 schema `CookieSyncManualUpload`（channel/dns 必填非空、shop_name/mobile_phone 可空、cookies 非空）
-- 新增独立 MV3 扩展 `extension/cookie-quick-upload/`（命名"Cookie 一键上报"，与 `extension/` 的"Cookie 同步助手"并存）：
-  - popup 打开自动读取当前标签页 URL，`chrome.cookies.getAll({url})` 抓取当前页面 cookie 并脱敏展示数量
-  - 四字段表单（channel/dns 必填、shop_name/mobile_phone 可空）
+- 新增独立 MV3 扩展 `extension/cookie-quick-upload/`（命名"Cookie 一键上报"，与 `extension/` 的"Cookie 同步助手"并存），主入口为页面内可移动悬浮球：
+  - background service worker：处理「读取当前标签页 cookie」「上报」「测试连接」三类消息（content script 的 fetch 受页面 CORS 限制，网络请求全部经 background 转发）
+  - content script（`content.js`）：向 http/https 页面注入可拖动悬浮球，点击展开上报面板（DOM 渲染）；面板展示 cookie 数（脱敏名称列表）、四字段表单、测试连接/上报/刷新重抓按钮
   - 抓取为空时提供「刷新页面并重新获取」：`chrome.tabs.reload` 当前标签页后延迟重新抓取
-  - 提交 `POST /api/cookies/manual`，展示新增/更新结果与条数
+  - 「测试连接」按钮经 background 调 `GET /api/ping`，展示后端联通结果（可达/不可达及原因）
   - options 页配置 `backendUrl` + `apiKey`（不依赖平台前端）
 
 **关键文件**
 
 - `backend/app/api/routes/cookie_sync.py`（新增 manual 端点）
-- `backend/app/schemas/cookie_sync.py`（新增 `ManualCookieUpload`）
+- `backend/app/schemas/cookie_sync.py`（新增 `CookieSyncManualUpload`）
 - `backend/app/services/cookie_sync_service.py`（新增手动上报处理，复用 legacy 写回）
 - `backend/app/tests/api/test_cookie_sync_api.py`（新增手动上报用例）
-- `extension/cookie-quick-upload/manifest.json`
-- `extension/cookie-quick-upload/popup.html` / `popup.js`
+- `extension/cookie-quick-upload/manifest.json`（新增 background + content_scripts）
+- `extension/cookie-quick-upload/background.js`（消息处理：抓 cookie / 上报 / 测试连接）
+- `extension/cookie-quick-upload/content.js`（可拖动悬浮球 + 上报面板）
 - `extension/cookie-quick-upload/options.html` / `options.js`
 
 **完成标准**
 
 - TestClient 走通 `POST /api/cookies/manual`：四字段 upsert（存在更新 `is_new=false`、不存在插入 `is_new=true`），`str_cookie` 拼接正确；无/错 `X-API-Key` 返回 401；cookie 值不入日志
-- 扩展在 Chrome 加载后可一键抓当前页面 cookie、填四字段提交写库；抓取为空时「刷新页面并重新获取」可用
+- 扩展在 Chrome 加载后：http/https 页面出现可拖动悬浮球，点击展开面板自动抓当前页面 cookie、填四字段提交写库；抓取为空时「刷新页面并重新获取」可用；「测试连接」经 background 调 `/api/ping` 正确展示联通结果
 - 后端测试与编译通过（不涉及前端构建）
 
 ## 6. 数据库表与归属阶段
