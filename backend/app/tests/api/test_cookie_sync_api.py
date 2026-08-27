@@ -60,6 +60,16 @@ def _get_ods_row(engine):
         return connection.execute(text("select * from ods_cookie_playwright")).mappings().first()
 
 
+def _seed_ods_row(engine) -> None:
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "insert into ods_cookie_playwright (channel, shop_name, mobile_phone, DNS, cookie, str_cookie) "
+                "values ('WEIXIN', 'shop-a', '13900000002', 'store.weixin.qq.com', '{}', 'sid=old')"
+            )
+        )
+
+
 def test_ping_no_auth(tmp_path: Path) -> None:
     _setup(tmp_path)
     try:
@@ -190,3 +200,156 @@ def test_tasks_empty_worker_returns_broadcast_only(tmp_path: Path) -> None:
             assert {t["worker"] for t in with_worker.json()["tasks"]} == {"同事A", "any"}
     finally:
         app.dependency_overrides.clear()
+
+
+def test_manual_upload_inserts_new(tmp_path: Path) -> None:
+    engine = _setup(tmp_path)
+    try:
+        with TestClient(app) as client:
+            r = client.post(
+                "/api/cookies/manual",
+                json={
+                    "channel": "WEIXIN",
+                    "shop_name": "shop-a",
+                    "mobile_phone": "13900000002",
+                    "dns": "store.weixin.qq.com",
+                    "cookies": [
+                        {"name": "sid", "value": "abc", "domain": "store.weixin.qq.com"},
+                        {"name": "token", "value": "xyz", "domain": "store.weixin.qq.com"},
+                    ],
+                },
+            )
+        assert r.status_code == 200
+        assert r.json() == {"ok": True, "stored": 2, "is_new": True}
+        row = _get_ods_row(engine)
+        assert row is not None
+        assert row["str_cookie"] == "sid=abc; token=xyz"
+        assert row["cookie"] == (
+            '[{"name": "sid", "value": "abc", "domain": "store.weixin.qq.com"}, '
+            '{"name": "token", "value": "xyz", "domain": "store.weixin.qq.com"}]'
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_manual_upload_updates_existing(tmp_path: Path) -> None:
+    engine = _setup(tmp_path)
+    _seed_ods_row(engine)
+    try:
+        with TestClient(app) as client:
+            r = client.post(
+                "/api/cookies/manual",
+                json={
+                    "channel": "WEIXIN",
+                    "shop_name": "shop-a",
+                    "mobile_phone": "13900000002",
+                    "dns": "store.weixin.qq.com",
+                    "cookies": [{"name": "sid", "value": "new_value", "domain": "store.weixin.qq.com"}],
+                },
+            )
+        assert r.status_code == 200
+        assert r.json() == {"ok": True, "stored": 1, "is_new": False}
+        row = _get_ods_row(engine)
+        assert row is not None
+        assert row["str_cookie"] == "sid=new_value"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_manual_upload_empty_cookies_returns_400(tmp_path: Path) -> None:
+    _setup(tmp_path)
+    try:
+        with TestClient(app) as client:
+            r = client.post(
+                "/api/cookies/manual",
+                json={
+                    "channel": "WEIXIN",
+                    "shop_name": "shop-a",
+                    "mobile_phone": "13900000002",
+                    "dns": "store.weixin.qq.com",
+                    "cookies": [],
+                },
+            )
+        assert r.status_code == 400
+        assert r.json()["error_code"] == "EMPTY_COOKIES"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_manual_upload_blank_channel_or_dns_rejected(tmp_path: Path) -> None:
+    engine = _setup(tmp_path)
+    try:
+        with TestClient(app) as client:
+            blank_channel = client.post(
+                "/api/cookies/manual",
+                json={
+                    "channel": "",
+                    "shop_name": "shop-a",
+                    "dns": "store.weixin.qq.com",
+                    "cookies": [{"name": "sid", "value": "abc", "domain": "store.weixin.qq.com"}],
+                },
+            )
+            assert blank_channel.status_code == 422
+
+            blank_dns = client.post(
+                "/api/cookies/manual",
+                json={
+                    "channel": "WEIXIN",
+                    "shop_name": "shop-a",
+                    "dns": "",
+                    "cookies": [{"name": "sid", "value": "abc", "domain": "store.weixin.qq.com"}],
+                },
+            )
+            assert blank_dns.status_code == 422
+        # 空定位键不得落库
+        assert _get_ods_row(engine) is None
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_manual_upload_auth_required_when_key_configured(tmp_path: Path, monkeypatch) -> None:
+    _setup(tmp_path)
+    monkeypatch.setenv("COOKIE_SYNC_API_KEY", "secret")
+    get_settings.cache_clear()
+    try:
+        with TestClient(app) as client:
+            no_key = client.post(
+                "/api/cookies/manual",
+                json={
+                    "channel": "WEIXIN",
+                    "shop_name": "shop-a",
+                    "dns": "store.weixin.qq.com",
+                    "cookies": [{"name": "sid", "value": "abc", "domain": "store.weixin.qq.com"}],
+                },
+            )
+            assert no_key.status_code == 401
+            assert no_key.json()["error_code"] == "UNAUTHORIZED"
+
+            wrong_key = client.post(
+                "/api/cookies/manual",
+                json={
+                    "channel": "WEIXIN",
+                    "shop_name": "shop-a",
+                    "dns": "store.weixin.qq.com",
+                    "cookies": [{"name": "sid", "value": "abc", "domain": "store.weixin.qq.com"}],
+                },
+                headers={"X-API-Key": "wrong"},
+            )
+            assert wrong_key.status_code == 401
+            assert wrong_key.json()["error_code"] == "UNAUTHORIZED"
+
+            ok = client.post(
+                "/api/cookies/manual",
+                json={
+                    "channel": "WEIXIN",
+                    "shop_name": "shop-a",
+                    "dns": "store.weixin.qq.com",
+                    "cookies": [{"name": "sid", "value": "abc", "domain": "store.weixin.qq.com"}],
+                },
+                headers={"X-API-Key": "secret"},
+            )
+            assert ok.status_code == 200
+            assert ok.json()["is_new"] is True
+    finally:
+        app.dependency_overrides.clear()
+        get_settings.cache_clear()

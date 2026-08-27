@@ -58,6 +58,7 @@
 9. 扩展接入 API 接收端（任务队列 + 正向映射写库）
 10. 采集任务检测与扩展采集闭环（复用健康检测检测逻辑）
 11. 采集模块前端页面（采集任务 / 映射管理 / 扩展接入）
+12. 手动 Cookie 上报扩展（`/api/cookies/manual` 端点 + 独立"Cookie 一键上报"扩展）
 
 ## 5. 阶段规划
 
@@ -415,6 +416,39 @@
 - 锁定目录点「打开调试」前端置灰、后端返回 `DIRECTORY_LOCKED`
 - 「关闭调试」清理对应 Chrome；后端测试与前端 `npm run build` 通过
 
+### Phase 13：手动 Cookie 上报扩展 ⏳
+
+**目标**
+
+实现"Cookie 一键上报"独立扩展与手动上报端点：用户在自己浏览器打开已登录页面，一键抓取当前页面 cookie，手动填写 `channel/shop_name/mobile_phone/dns`，直接写回旧表。不经映射表、无采集者概念、不挂平台前端。
+
+**交付物**
+
+- 后端新增 `POST /api/cookies/manual` 端点：body `{channel, shop_name, mobile_phone, dns, cookies, collected_at}` → `{ok, stored, is_new}`；复用 `legacy_cookie_service.upsert_by_lookup` 按四字段先查后改（存在更新、不存在插入，填 `cookie` JSON + `str_cookie` 拼接串）；沿用 `X-API-Key` 鉴权（非 ping 接口）
+- 新增 schema `CookieSyncManualUpload`（channel/dns 必填非空、shop_name/mobile_phone 可空、cookies 非空）
+- 新增独立 MV3 扩展 `extension/cookie-quick-upload/`（命名"Cookie 一键上报"，与 `extension/` 的"Cookie 同步助手"并存）：
+  - popup 打开自动读取当前标签页 URL，`chrome.cookies.getAll({url})` 抓取当前页面 cookie 并脱敏展示数量
+  - 四字段表单（channel/dns 必填、shop_name/mobile_phone 可空）
+  - 抓取为空时提供「刷新页面并重新获取」：`chrome.tabs.reload` 当前标签页后延迟重新抓取
+  - 提交 `POST /api/cookies/manual`，展示新增/更新结果与条数
+  - options 页配置 `backendUrl` + `apiKey`（不依赖平台前端）
+
+**关键文件**
+
+- `backend/app/api/routes/cookie_sync.py`（新增 manual 端点）
+- `backend/app/schemas/cookie_sync.py`（新增 `ManualCookieUpload`）
+- `backend/app/services/cookie_sync_service.py`（新增手动上报处理，复用 legacy 写回）
+- `backend/app/tests/api/test_cookie_sync_api.py`（新增手动上报用例）
+- `extension/cookie-quick-upload/manifest.json`
+- `extension/cookie-quick-upload/popup.html` / `popup.js`
+- `extension/cookie-quick-upload/options.html` / `options.js`
+
+**完成标准**
+
+- TestClient 走通 `POST /api/cookies/manual`：四字段 upsert（存在更新 `is_new=false`、不存在插入 `is_new=true`），`str_cookie` 拼接正确；无/错 `X-API-Key` 返回 401；cookie 值不入日志
+- 扩展在 Chrome 加载后可一键抓当前页面 cookie、填四字段提交写库；抓取为空时「刷新页面并重新获取」可用
+- 后端测试与编译通过（不涉及前端构建）
+
 ## 6. 数据库表与归属阶段
 
 | 表 / 实体 | 归属阶段 | 说明 |
@@ -428,7 +462,7 @@
 | `cookie_sync_task` | Phase 7 / 9 | 采集任务：检测配置、调度、同步超时、状态 |
 | `cookie_sync_mapping` | Phase 7 / 8 | 采集映射：`(worker_id, domain) → channel/shop_name/mobile_phone/dns` |
 | `cookie_sync_job` | Phase 7 / 8 | 扩展采集任务队列：`task_id/worker_id/domains/status` |
-| `ods_cookie_playwright` | 外部依赖 | legacy cookie 数据来源；健康检测只读，扩展采集写回（Phase 7 起具备写回能力） |
+| `ods_cookie_playwright` | 外部依赖 | legacy cookie 数据来源；健康检测只读；扩展采集写回（Phase 7 起具备写回能力）；手动上报写回（Phase 13） |
 | `session_maintenance_task` | 已废弃 | 旧维护任务表，保留数据不再读写 |
 | `health_check_config` | 已废弃 | 旧健康检测表，保留数据不再读写 |
 | `manual_repair_ticket` | 已废弃 | 旧人工修复工单表，保留数据不再读写 |
@@ -456,6 +490,7 @@
 3. **Phase 11-12（部署可移植化 + 目录库 CDP 调试）**：
    - Phase 11 清理硬编码端口，部署链路全部 `.env` 驱动
    - Phase 12 目录库调试端口 + 打开/关闭调试
-4. 全部通过后做完整联调与发布准备。
+4. **Phase 13（手动 Cookie 上报扩展）**：`POST /api/cookies/manual` 端点 + 独立"Cookie 一键上报"扩展（复用 Phase 7 写回能力，不依赖前端）
+5. 全部通过后做完整联调与发布准备。
 
 > 说明：扩展本体（Chrome 扩展）已在 `D:\公司小疑问\chrome扩展` 联调验证过，平台侧只需实现接收端 API，扩展代码不改（Phase 8 以现有 `background.js` 契约为准；Phase 10 将扩展包纳入仓库便于分发）。

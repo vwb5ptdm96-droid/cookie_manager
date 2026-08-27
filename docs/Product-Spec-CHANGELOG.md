@@ -1,5 +1,14 @@
 # Product Spec Changelog
 
+## 2026-08-27 · 手动 Cookie 上报扩展
+
+- 新增：SCOPE-017 手动 Cookie 上报扩展——独立 MV3 Chrome 扩展，一键抓取当前页面 cookie，手动填写 channel/shop_name/mobile_phone/dns 写回 `ods_cookie_playwright`；不经映射表、无采集者概念；重复上传按四字段 upsert（存在更新、不存在插入）；没抓到 cookie 时支持刷新当前页面重抓。
+- 新增：TASK-006（手动上传当前页面 cookie 入库）、FLOW-006（手动上报流程）、REQ-010（手动 Cookie 上报扩展，含"刷新页面并重新获取"交互与脱敏展示）。
+- 新增：扩展接入 API 第六接口 `POST /api/cookies/manual`（REQ-009 更新）：body `{channel, shop_name, mobile_phone, dns, cookies, collected_at}` → `{ok, stored, is_new}`；不经映射表、按四字段 upsert 写回旧表；与现有接口一致走 `X-API-Key` 鉴权。
+- 新增：DEP-011（Cookie 一键上报扩展 + 本机浏览器）、ASM-006（四字段 upsert 语义假设）。
+- 调整：REQ-009 扩展契约从五条扩为六条，补充手动上报规则与字段（channel/dns 必填、shop_name/mobile_phone 可空）；数据模型补手动上报写回旧表关系与数据规则。
+- 定界：扩展命名「Cookie 一键上报」；纯粹独立、不挂平台前端——后端地址与 API Key 在扩展自身 options 页维护，平台前端扩展接入展示区仅保留任务驱动扩展「Cookie 同步助手」（IA-004 保持原样）。
+
 ## 2026-08-26 · 部署可移植化 + 目录库 CDP 调试
 
 - 新增：SCOPE-015 部署配置可移植化——启动链路全部从 `.env` 读取（`APP_PORT` 端口、`DEPLOY_ROOT/RUNTIME_ROOT/DATABASE_URL` 相对路径自动解析、`CHROME_PATH` Chrome 路径），清理前端硬编码端口（扩展接入展示改动态 origin、开发代理按 `.env` 解析），部署机无 E 盘、默认端口被占时改 `.env` 即可启动。

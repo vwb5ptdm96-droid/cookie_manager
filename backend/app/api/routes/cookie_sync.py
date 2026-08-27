@@ -5,7 +5,12 @@ from sqlalchemy import Engine
 from sqlalchemy.orm import sessionmaker
 
 from app.api.deps import get_session_factory, require_cookie_sync_key
-from app.schemas.cookie_sync import CookieSyncReport, CookieSyncRequest, CookieSyncUpload
+from app.schemas.cookie_sync import (
+    CookieSyncManualUpload,
+    CookieSyncReport,
+    CookieSyncRequest,
+    CookieSyncUpload,
+)
 from app.services.cookie_sync_service import CookieSyncService
 
 router = APIRouter(tags=["cookie-sync"])
@@ -69,4 +74,20 @@ def upload_cookies(
     return service.handle_direct_upload(
         cookies=payload.cookies,
         worker_id=payload.worker_id,
+    )
+
+
+@router.post("/cookies/manual")
+def upload_manual(
+    payload: CookieSyncManualUpload,
+    service: CookieSyncService = Depends(build_cookie_sync_service),
+    _: None = Depends(require_cookie_sync_key),
+) -> dict[str, object]:
+    """手动上报扩展「Cookie 一键上报」：按四字段 upsert 写回旧表，不经映射表、无 worker 归属。"""
+    return service.handle_manual_upload(
+        channel=payload.channel,
+        shop_name=payload.shop_name,
+        mobile_phone=payload.mobile_phone,
+        dns=payload.dns,
+        cookies=payload.cookies,
     )

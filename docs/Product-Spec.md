@@ -64,6 +64,7 @@
 | SCOPE-014 | 采集 cookie 写回旧表 | P0 | 先查后改写回 `ods_cookie_playwright`，填 `cookie` + `str_cookie` |
 | SCOPE-015 | 部署配置可移植化 | P0 | 启动链路全部从 `.env` 读取（端口/路径/Chrome 路径），清理硬编码端口与盘符，部署机无 E 盘、默认端口被占时改 `.env` 即可启动 |
 | SCOPE-016 | 目录库 CDP 调试功能 | P0 | 目录库每目录存默认调试端口；可一键拉起/关闭带该目录（`--user-data-dir`）的可见 Chrome，CDP 端口供外部脚本连接调试；Chrome 路径走 `CHROME_PATH` |
+| SCOPE-017 | 手动 Cookie 上报扩展 | P0 | 独立 MV3 Chrome 扩展「Cookie 一键上报」，一键抓取当前页面 cookie，手动填写 `channel/shop_name/mobile_phone/dns` 写回 `ods_cookie_playwright`；不经映射表、无采集者概念；重复上传按四字段 upsert；没抓到 cookie 时支持刷新当前页面重抓；纯粹独立、不挂平台前端 |
 
 ### 2.2 不在本版本范围
 
@@ -92,6 +93,7 @@
 | TASK-003 | 管理本机 Profile 与脚本资源，保障任务可执行 | 内部运维/开发人员 | P0 |
 | TASK-004 | 查看系统健康、部署环境和运行日志，快速定位问题 | 内部运维/开发人员 | P0 |
 | TASK-005 | 管理 Cookie 扩展采集：采集任务、映射、扩展接入 | 内部运维/开发人员 | P0 |
+| TASK-006 | 手动上传当前页面 cookie 入库（填业务定位字段） | 内部运维/开发人员 | P0 |
 
 ---
 
@@ -233,6 +235,34 @@
 **完成状态：**
 扩展读取的 cookie 已按映射归属写回旧表，采集任务可复检。
 
+### FLOW-006: 手动上报当前页面 cookie 入库
+
+**关联任务：** TASK-006  
+**优先级：** P0  
+**目标：** 让用户在自己浏览器打开已登录的店铺页面后，一键抓取当前页面 cookie，手动填写定位字段，直接写回旧表。无需任务调度、映射表、同事协同或预配置域名。
+
+**入口：**  
+用户打开目标页面（已登录）→ 点击扩展图标。
+
+**主路径：**
+1. 扩展 popup 打开时自动读取当前标签页 URL，`chrome.cookies.getAll({url})` 抓取当前页面相关 cookie。
+2. popup 展示抓取到的 cookie 数量（脱敏），用户手动填写定位字段：channel（必填）、shop_name（可空）、mobile_phone（可空）、dns（必填）。
+3. 用户点击提交，扩展 `POST /api/cookies/manual` 携带 `{channel, shop_name, mobile_phone, dns, cookies, collected_at}`。
+4. 平台校验 `X-API-Key`，按 `(channel, shop_name, mobile_phone, dns)` 先查后改写回 `ods_cookie_playwright`：存在则更新 `cookie/str_cookie/headers`，不存在则插入，返回 `{ok, stored, is_new}`。
+5. popup 展示提交结果（新增/更新、条数），采集脚本即可读取新登录态。
+
+**分支路径：**
+- 抓取为空：popup 提示未抓到 cookie，提供"刷新页面并重新获取"按钮；点击后刷新当前标签页，延迟后重新抓取。
+- 提交失败：展示后端错误信息，保留表单内容供重试。
+
+**边界情况：**
+- 手动上报不经映射表，`(channel, shop_name, mobile_phone, dns)` 即写库定位键；与采集任务共用旧表但互不干扰。
+- 无采集者概念：上报不归属任何 worker、不写 `cookie_sync_mapping`。
+- cookie 存库格式与采集写回一致：`cookie` 列存 JSON 全量，`str_cookie` 列存 `; ` 拼接的 `name=value`。
+
+**完成状态：**
+用户看到"新增/更新 N 条 cookie"的结果，无需任何调度或映射配置。
+
 ---
 
 ## 5. 功能需求
@@ -293,7 +323,7 @@
 | 运行日志 | 筛选栏 + 时间线/表格 | 时间、类型、状态、标题、消息、关联对象 | 筛选、查看详情 |
 | 环境自检 | 自检结果卡片/列表 | 检查项、状态、说明、明细 | 执行自检、查看详情 |
 | 部署配置 | 配置说明页 | 根目录、运行目录、关键子目录、启动方式、端口、当前运行用户提示 | 查看配置 |
-| Cookie 采集任务 | 任务列表 + 映射管理 + 扩展接入 | 采集任务名、cron、cookie 定位信息、检测 API、状态、最近检测/采集时间；映射：worker_id、domain、channel、shop_name、mobile_phone、dns | 新增、编辑、启停、删除、立即检测、查看日志；映射增删改；扩展接入信息展示 |
+| Cookie 采集任务 | 任务列表 + 映射管理 + 扩展接入 | 采集任务名、cron、cookie 定位信息、检测 API、状态、最近检测/采集时间；映射：worker_id、domain、channel、shop_name、mobile_phone、dns | 新增、编辑、启停、删除、立即检测、查看日志；映射增删改；扩展接入信息展示（仅任务驱动扩展"Cookie 同步助手"） |
 
 #### IA-005: 表格列与详情弹窗要求
 
@@ -785,10 +815,10 @@
 **关联流程：** FLOW-005  
 
 **用途：**  
-实现 Chrome 扩展（Cookie 同步助手）契约的接收端接口，让同事电脑上的扩展可连接平台完成任务轮询与上报。
+实现 Chrome 扩展契约的接收端接口：同事电脑上的"Cookie 同步助手"（任务驱动）可连接平台完成任务轮询与上报；本机"手动上报扩展"可一键提交当前页面 cookie 入库。
 
 **行为：**  
-平台提供扩展契约五条接口；校验 `X-API-Key`（`COOKIE_SYNC_API_KEY` 留空时关闭鉴权，仅限本地联调）；接收上报 cookie 按映射写回旧表；无映射上报丢弃并记日志。
+平台提供扩展契约六条接口；校验 `X-API-Key`（`COOKIE_SYNC_API_KEY` 留空时关闭鉴权，仅限本地联调）；任务驱动上报按映射写回旧表、无映射上报丢弃并记日志；手动上报不经映射表、直接按四字段 upsert 写回旧表。
 
 **规则：**
 - MUST 实现 `GET /api/ping`（无鉴权，扩展测试连接用）。
@@ -796,6 +826,7 @@
 - MUST 实现 `GET /api/tasks?worker_id=xxx`（返回派给该采集者的待处理任务：`{tasks:[{task_id, worker, domains, status}]}`）。
 - MUST 实现 `POST /api/tasks/{task_id}/report`（扩展上报：`{cookies, worker_id, collected_at}`）。
 - MUST 实现 `POST /api/cookies`（扩展定时兜底/立即同步直接推送：`{domains, cookies, worker_id, collected_at}`）。
+- MUST 实现 `POST /api/cookies/manual`（手动上报扩展一键提交：`{channel, shop_name, mobile_phone, dns, cookies, collected_at}`；不经映射表，按四字段 upsert 写回旧表，返回 `{ok, stored, is_new}`）。
 - MUST 除 `/api/ping` 外所有接口校验 `X-API-Key`（`COOKIE_SYNC_API_KEY` 留空时关闭鉴权，见下条），密钥来自 `.env`。
 - MUST `COOKIE_SYNC_API_KEY` 为空时关闭鉴权（仅限本地联调）；配置非空时所有非 ping 接口强制校验（生产必填）。
 - MUST 上报 cookie 脱敏，日志不得明文记录 cookie 值。
@@ -807,18 +838,76 @@
 | 字段 | 类型 | 必填 | 校验规则 |
 |---|---|---:|---|
 | X-API-Key | header | 条件 | `COOKIE_SYNC_API_KEY` 非空时必填，必须等于其值；留空时关闭鉴权 |
-| domains | string[] | Yes | 非空 |
+| domains | string[] | 条件 | 任务驱动接口（`/api/request`、`/api/cookies`）非空 |
 | worker_id | string | No | 空则归 `unknown` |
 | cookies | object[] | Yes | `chrome.cookies` 原生字段（name/value/domain/path/secure/httpOnly/expirationDate/sameSite） |
 | worker_ids | string[] | No | `/api/request` 定向采集者列表 |
+| channel | string | 条件 | `/api/cookies/manual` 必填，非空 |
+| shop_name | string | No | `/api/cookies/manual` 可空 |
+| mobile_phone | string | No | `/api/cookies/manual` 可空 |
+| dns | string | 条件 | `/api/cookies/manual` 必填，非空 |
 
 **输出 / 结果：**
-- 扩展可轮询、上报、直推；采集任务可完成"下发→上报→写库→复检"闭环。
+- 扩展可轮询、上报、直推；采集任务可完成"下发→上报→写库→复检"闭环；手动上报扩展可按四字段写回旧表。
 
 **验收标准：**
 - [ ] AC-001: Given `COOKIE_SYNC_API_KEY` 已配置, when 请求无或错 `X-API-Key`, then 非 ping 接口返回 401。
 - [ ] AC-002: Given 扩展上报无映射的域名, when 上报, then cookie 不写库并记 WARN 日志。
 - [ ] AC-003: Given 采集任务进入 `SYNCING`, when 扩展轮询, then 扩展能拿到定向任务并上报，平台写回旧表。
+- [ ] AC-004: Given `POST /api/cookies/manual` 携带合法四字段与 cookies, when 定位键已存在, then 覆盖更新该记录并返回 `is_new=false`；不存在则插入并返回 `is_new=true`。
+
+### REQ-010: 手动 Cookie 上报扩展
+
+**优先级：** P0  
+**关联任务：** TASK-006  
+**关联流程：** FLOW-006  
+
+**用途：**  
+独立 MV3 Chrome 扩展，供运维/开发人员在自己浏览器一键抓取当前页面 cookie，手动填写业务定位字段，直接写回旧表。与"Cookie 同步助手"（任务驱动）并存。
+
+**行为：**  
+扩展 popup 打开时自动抓取当前标签页 cookie → 手动填写 channel/shop_name/mobile_phone/dns → 提交 `POST /api/cookies/manual` → 后端按四字段 upsert 写回 `ods_cookie_playwright`。
+
+**规则：**
+- MUST 独立于"Cookie 同步助手"扩展，两者并存；本扩展为手动驱动，无任务轮询、无域名预配置、无 worker_id/采集者概念。
+- MUST NOT 依赖平台前端：后端地址与 `X-API-Key` 在扩展自身 options 页维护；平台前端不展示本扩展接入信息。
+- MUST popup 打开时自动读取当前标签页 URL，`chrome.cookies.getAll({url})` 抓取当前页面相关 cookie；域名从当前 URL 取，不手填。
+- MUST 手动填写定位字段：channel、dns 必填；shop_name、mobile_phone 可空。
+- MUST 提交调用 `POST /api/cookies/manual`，body：`{channel, shop_name, mobile_phone, dns, cookies, collected_at}`。
+- MUST 后端按 `(channel, shop_name, mobile_phone, dns)` 先查后改写回旧表（存在更新、不存在插入），复用采集写回逻辑；填 `cookie`（JSON 全量）+ `str_cookie`（`; ` 拼接 name=value），时间戳列存在则维护。
+- MUST NOT 写 `cookie_sync_mapping`；上报不归属任何 worker。
+- MUST 抓取为空时提供"刷新页面并重新获取"：刷新当前标签页后延迟重新抓取。
+- MUST popup 内脱敏展示 cookie（不展示 value）；提交时 cookies 经 HTTPS 传输，日志不得明文记录 cookie 值。
+- MUST 接口校验 `X-API-Key`（`COOKIE_SYNC_API_KEY` 留空时关闭鉴权，仅限本地联调）。
+
+**输入：**
+
+| 字段 | 类型 | 必填 | 校验规则 |
+|---|---|---:|---|
+| X-API-Key | header | 条件 | `COOKIE_SYNC_API_KEY` 非空时必填，必须等于其值；留空时关闭鉴权 |
+| channel | string | Yes | 非空 |
+| shop_name | string | No | 可空 |
+| mobile_phone | string | No | 可空 |
+| dns | string | Yes | 非空 |
+| cookies | object[] | Yes | `chrome.cookies` 原生字段（name/value/domain/path/secure/httpOnly/expirationDate/sameSite），非空 |
+| collected_at | string | No | ISO 时间 |
+
+**输出 / 结果：**
+- 旧表按定位键 upsert 成功，采集脚本可立即读取新登录态。
+
+**状态：**
+- 默认：显示当前页面抓取结果与表单。
+- 加载：抓取中 / 提交中。
+- 空状态：未抓到 cookie 时给出"刷新页面并重新获取"入口。
+- 错误：字段校验失败、提交失败给出明确错误并保留表单。
+- 成功：展示"新增/更新 N 条 cookie"。
+
+**验收标准：**
+- [ ] AC-001: Given 用户打开已登录页面点击扩展, when popup 打开, then 自动抓取当前页面 cookie 并展示数量（脱敏）。
+- [ ] AC-002: Given 用户填写定位字段并提交, when 该 `(channel, shop_name, mobile_phone, dns)` 已存在旧表, then 覆盖更新该记录并提示更新。
+- [ ] AC-003: Given 用户填写定位字段并提交, when 该定位键不存在, then 新增记录并提示新增。
+- [ ] AC-004: Given 抓取为空, when 用户点击"刷新页面并重新获取", then 当前标签页刷新并重新抓取 cookie。
+- [ ] AC-005: Given `COOKIE_SYNC_API_KEY` 已配置, when 无/错 `X-API-Key` 请求 `/api/cookies/manual`, then 返回 401。
 
 ### AI 能力规格（每个 AI 功能必填）
 
@@ -860,6 +949,7 @@
 | CookieSyncTask reads/writes LegacyCookieRecord | 采集任务从旧表读 cookie 检测，采集成功后写回旧表 |
 | CookieSyncTask references CookieSyncMapping | 检测失败时按映射反查 `(worker_id, domain)` |
 | CookieSyncJob belongs to CookieSyncTask | 一次采集下发对应一个任务实例，定向派给某 worker |
+| 手动上报（Cookie 一键上报扩展） writes LegacyCookieRecord | 手动上报扩展按 `(channel, shop_name, mobile_phone, dns)` 定位直接写回旧表，不经映射表、无 worker 归属 |
 
 ### 6.3 数据规则
 
@@ -869,6 +959,7 @@
 - 目录在脚本运行期间必须锁定，运行结束释放，避免并发使用。
 - 旧 cookie 表的主键和结构不由本系统修改，只按既有字段读写；扩展采集写回采用先查后改，不依赖旧表唯一索引。
 - 扩展上报 cookie 写回旧表必须经映射表；无映射的上报丢弃并记 WARN 日志。
+- 手动上报（`POST /api/cookies/manual`）不经映射表，按 `(channel, shop_name, mobile_phone, dns)` 四字段 upsert 写回旧表，无 worker_id 归属。
 - 扩展接口除 `/api/ping` 外必须校验 `X-API-Key`（`COOKIE_SYNC_API_KEY` 留空时关闭鉴权，仅限本地联调）；密钥在 `.env`。
 - 采集任务不绑定目录，无锁冲突。
 - 日志必须脱敏，不能明文记录 cookie、凭证或密码。
@@ -889,6 +980,7 @@
 | DEP-008 | 飞书机器人 Webhook | 失败/风控通知 | Yes | 检测失败与修复风控时推送提醒 |
 | DEP-009 | Chrome 扩展（Cookie 同步助手）+ 同事电脑浏览器 | 采集同事浏览器登录态 cookie | Yes | 扩展本体装在同事机器，平台仅实现接收端 API |
 | DEP-010 | 阿里云 RDS MySQL 写权限 | 扩展采集 cookie 写回 `ods_cookie_playwright` | Yes | 需 RDS 账号具备 UPDATE/INSERT 权限 |
+| DEP-011 | Chrome 扩展（Cookie 一键上报）+ 本机浏览器 | 手动抓取当前页面 cookie 按四字段写库 | Yes | 扩展装在自己浏览器，手动驱动，不经映射表、无 worker 归属 |
 
 ---
 
@@ -928,6 +1020,7 @@ MVP 完成条件：
 | ASM-003 | 调度范围仅覆盖启用的健康检测任务，按 cron 表达式触发检测与修复；未配置 cron 的任务每隔至少 5 分钟兜底执行一次 | 文档明确 APScheduler 负责扫描健康检测任务 | 若需要更复杂的调度（间隔、时段），调度模型需扩展 |
 | ASM-004 | 风控场景（短信、扫码、验证码、设备验证）只发送飞书提醒，不做人工修复工单闭环 | 用户已确认废弃人工修复模块 | 若未来需要人工接管流程，需重新引入工单与复检机制 |
 | ASM-005 | 同一同事同一域名的多店铺登录态本版不区分，一个 (worker_id, domain) 对应一条业务记录 | 用户确认"先不处理" | 若实际需区分，需引入 profile 级 worker 或采集标识，映射模型需扩展 |
+| ASM-006 | 手动上报按 `(channel, shop_name, mobile_phone, dns)` 四字段 upsert 写回旧表，不经映射表、无采集者归属；与采集任务共用旧表互不干扰 | 用户确认"四个是主键，新增修改入库，不区分采集者" | 若同一四字段定位对应多账号/多场景，覆盖更新会互相覆盖，需额外标识维度 |
 
 ### 10.2 待确认问题
 

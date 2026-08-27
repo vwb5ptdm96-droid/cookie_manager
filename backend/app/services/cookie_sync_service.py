@@ -49,6 +49,17 @@ class CookieSyncService:
         return f"task_{uuid4().hex[:10]}"
 
     @staticmethod
+    def _build_cookie_payload(cookies: list[dict[str, object]]) -> tuple[str, str]:
+        """构建旧表写回 payload：cookie 列存 JSON 全量，str_cookie 列存 `; ` 拼接的 name=value。"""
+        cookie_json = json.dumps(cookies, ensure_ascii=False)
+        str_cookie = "; ".join(
+            f"{c['name']}={c['value']}"
+            for c in cookies
+            if c.get("name") is not None and c.get("value") is not None
+        )
+        return cookie_json, str_cookie
+
+    @staticmethod
     def _serialize_job(job: CookieSyncJob) -> dict[str, object]:
         return {
             "task_id": job.task_id,
@@ -163,6 +174,42 @@ class CookieSyncService:
             session.commit()
         return {"ok": True, "stored": stored, "worker_id": attribution}
 
+    # ── 手动上报：POST /api/cookies/manual ──
+
+    def handle_manual_upload(
+        self,
+        channel: str,
+        shop_name: str | None,
+        mobile_phone: str | None,
+        dns: str,
+        cookies: list[dict[str, object]],
+    ) -> dict[str, object]:
+        """手动上报「Cookie 一键上报」扩展提交：不经映射表，按四字段 upsert 写回旧表。
+
+        存在则更新、不存在则插入（复用 legacy_cookie_service.upsert_by_lookup），
+        无 worker 归属、不写 cookie_sync_mapping。返回写入条数与是否新增。
+        """
+        if not cookies:
+            raise AppError("cookies 不能为空", "EMPTY_COOKIES")
+
+        cookie_json, str_cookie = self._build_cookie_payload(cookies)
+        try:
+            is_new = self.legacy_cookie_service.upsert_by_lookup(
+                LegacyCookieLookup(
+                    channel=channel,
+                    shop_name=shop_name or "",
+                    mobile_phone=mobile_phone or "",
+                    dns=dns,
+                ),
+                cookie_json=cookie_json,
+                str_cookie=str_cookie,
+            )
+        except SQLAlchemyError:
+            logger.exception("手动上报写回 ods 表失败 channel=%s dns=%s", channel, dns)
+            raise AppError("写回旧表失败", "COOKIE_WRITE_FAILED", status_code=500) from None
+
+        return {"ok": True, "stored": len(cookies), "is_new": is_new}
+
     # ── 按映射写回 ods 表 ──
 
     def _write_cookies_by_mapping(self, session: Session, worker_id: str, cookies: list[dict[str, object]]) -> int:
@@ -188,12 +235,7 @@ class CookieSyncService:
                 logger.warning("无映射，丢弃 worker=%s domain=%s 的 %d 条 cookie", worker_id, normalized, len(cs))
                 continue
 
-            cookie_json = json.dumps(cs, ensure_ascii=False)
-            str_cookie = "; ".join(
-                f"{c['name']}={c['value']}"
-                for c in cs
-                if c.get("name") is not None and c.get("value") is not None
-            )
+            cookie_json, str_cookie = self._build_cookie_payload(cs)
             try:
                 self.legacy_cookie_service.upsert_by_lookup(
                     LegacyCookieLookup(

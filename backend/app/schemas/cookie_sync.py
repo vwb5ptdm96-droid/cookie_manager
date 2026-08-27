@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class CookieSyncRequest(BaseModel):
@@ -27,6 +27,21 @@ class CookieSyncUpload(BaseModel):
     cookies: list[dict[str, object]]
     worker_id: str | None = None
     collected_at: str | None = None
+
+
+class CookieSyncManualUpload(BaseModel):
+    """POST /api/cookies/manual：手动上报扩展「Cookie 一键上报」提交。
+
+    不经映射表，按 (channel, shop_name, mobile_phone, dns) 四字段 upsert 写回旧表。
+    channel/dns 为写库定位键，非空；shop_name/mobile_phone 可空。
+    """
+
+    channel: str = Field(min_length=1)
+    shop_name: str | None = None
+    mobile_phone: str | None = None
+    dns: str = Field(min_length=1)
+    cookies: list[dict[str, object]]
+    collected_at: str | None = None  # 契约保留字段（采集时间，暂不落库）
 
 
 class CookieSyncMappingResponse(BaseModel):
