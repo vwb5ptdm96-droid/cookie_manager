@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Cookie 一键上报",
+  "version": "1.0.0",
+  "description": "一键抓取当前页面 Cookie，手动填写渠道/店铺/手机号/DNS 上报入库，供采集脚本使用。",
+  "permissions": [
+    "cookies",
+    "storage"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Cookie 一键上报"
+  },
+  "options_page": "options.html"
+}

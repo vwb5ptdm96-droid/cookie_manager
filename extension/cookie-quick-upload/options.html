@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>Cookie 一键上报 - 设置</title>
+  <style>
+    body {
+      font-family: "Microsoft YaHei", system-ui, sans-serif;
+      max-width: 480px;
+      margin: 40px auto;
+      padding: 0 16px;
+      color: #222;
+    }
+    h1 { font-size: 18px; margin-bottom: 18px; }
+    label {
+      display: block;
+      margin: 14px 0 4px;
+      font-size: 13px;
+      color: #555;
+    }
+    input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 8px 10px;
+      border: 1px solid #d0d0d0;
+      border-radius: 6px;
+      font-size: 14px;
+    }
+    .muted { color: #888; font-size: 12px; margin: 4px 0 0; }
+    .btn {
+      padding: 9px 22px;
+      margin-top: 18px;
+      border: none;
+      border-radius: 6px;
+      font-size: 14px;
+      cursor: pointer;
+      background: #2563eb;
+      color: #fff;
+    }
+    .btn:hover { background: #1d4ed8; }
+    #status { margin-top: 10px; font-size: 13px; min-height: 18px; }
+    .ok { color: #1a7f37; }
+    .fail { color: #cf222e; }
+  </style>
+</head>
+<body>
+  <h1>🍪 Cookie 一键上报 - 设置</h1>
+
+  <label for="backendUrl">后端地址</label>
+  <input id="backendUrl" placeholder="http://127.0.0.1:8081" />
+  <p class="muted">平台后端地址（自动去尾斜杠），与后端 `.env` 的 APP_PORT 一致。非本机的 http 地址会被拦截，请用 https 或本机地址。</p>
+
+  <label for="apiKey">API Key（可选）</label>
+  <input id="apiKey" type="password" placeholder="与后端 COOKIE_SYNC_API_KEY 一致" />
+  <p class="muted">后端 COOKIE_SYNC_API_KEY 留空时无需填写；已配置时请求头带 X-API-Key。</p>
+
+  <button class="btn" id="saveBtn">保存</button>
+  <div id="status"></div>
+
+  <script src="options.js"></script>
+</body>
+</html>
