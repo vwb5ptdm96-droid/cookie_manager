@@ -52,23 +52,13 @@ class HealthTaskScheduler:
 
         for task in tasks:
             # ── 检测调度 ──
+            # 有 cron 表达式才走调度；无 cron（=手动）仅手动触发，调度器跳过（ASM-003）
             if task.cron_expression:
                 if self._match_cron(task.cron_expression.strip(), now):
                     try:
                         service.execute_check(task.health_task_code)
                     except Exception as exc:
                         logger.exception("调度检测失败 [%s]: %s", task.health_task_code, exc)
-            else:
-                # 没有 cron 表达式：每隔至少 5 分钟跑一次
-                if task.last_checked_at is not None:
-                    elapsed = (now - task.last_checked_at).total_seconds()
-                    if elapsed < 300:
-                        pass  # 还没到时间
-                    else:
-                        try:
-                            service.execute_check(task.health_task_code)
-                        except Exception as exc:
-                            logger.exception("调度检测失败 [%s]: %s", task.health_task_code, exc)
 
             # ── 修复调度（独立 cron，不管检测结果）──
             if task.repair_cron_expression and task.repair_script_id:
@@ -103,21 +93,14 @@ class HealthTaskScheduler:
 
         for task in sync_tasks:
             # ── 定时检测 ──
-            if task.cron_expression:
+            # 有 cron 表达式才走调度；无 cron（=手动）仅手动触发，调度器跳过（ASM-003）。
+            # SYNCING（等待扩展采集上报）的任务不重复触发检测，避免重复下发采集（由下方收尾逻辑复检/超时处理）。
+            if task.cron_expression and task.status != "SYNCING":
                 if self._match_cron(task.cron_expression.strip(), now):
                     try:
                         service.execute_check(task.cookie_sync_task_code)
                     except Exception as exc:
                         logger.exception("采集任务调度检测失败 [%s]: %s", task.cookie_sync_task_code, exc)
-            else:
-                if task.last_checked_at is not None:
-                    elapsed = (now - task.last_checked_at).total_seconds()
-                    if elapsed < 300:
-                        continue
-                try:
-                    service.execute_check(task.cookie_sync_task_code)
-                except Exception as exc:
-                    logger.exception("采集任务调度检测失败 [%s]: %s", task.cookie_sync_task_code, exc)
 
         # ── SYNCING 收尾：上报完成 → 复检；超时 → FAIL ──
         with Session(self.engine) as session:

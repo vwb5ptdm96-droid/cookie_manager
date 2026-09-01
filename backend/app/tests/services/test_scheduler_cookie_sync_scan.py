@@ -79,6 +79,7 @@ def _make_env(tmp_path: Path, monkeypatch, http_status: int = 500):
             dns="store.weixin.qq.com",
             check_url="https://store.weixin.qq.com/check",
             http_method="GET",
+            cron_expression="* * * * *",  # 定时任务：每次扫描都命中（ASM-003：仅 cron 任务走调度）
             failure_rule='{"status_code": 500}',
             sync_wait_timeout_seconds=180,
             status="PENDING",
