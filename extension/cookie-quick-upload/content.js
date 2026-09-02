@@ -81,6 +81,7 @@
       <input id="cqu-hdr-filter" list="cqu-hdr-filter-options" placeholder="如 token，留空不过滤" />
       <datalist id="cqu-hdr-filter-options">
         <option value="token"></option>
+        <option value="x-secsdk-csrf-token"></option>
       </datalist>
     </div>
     <div id="cqu-status" class="cqu-muted"></div>
