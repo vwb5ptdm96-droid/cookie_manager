@@ -48,7 +48,7 @@
 
 | 编号 | 内容 | 优先级 | 备注 |
 |---|---|---|---|
-| SCOPE-001 | Windows 单机部署的 Session 健康检测与修复系统 | P0 | 不依赖 Docker，使用 CMD/BAT 启动 |
+| SCOPE-001 | Windows 单机部署的 Session 健康检测与修复系统 | P0 | 不依赖 Docker；本地目录 + CMD/BAT 启动，生产托管为 Windows 服务（见 SCOPE-018） |
 | SCOPE-002 | 健康检测任务 CRUD、启停、克隆、删除、手动检测、手动修复 | P0 | 以健康检测任务为系统核心，绑定修复脚本与 Profile |
 | SCOPE-003 | 定时调度 | P0 | APScheduler 扫描启用任务，按 cron 表达式触发检测与修复 |
 | SCOPE-004 | Profile 目录注册、校验、锁定/解锁、复检 | P0 | 路径基于 `RUNTIME_ROOT` 解析；锁定由脚本运行持有 |
@@ -65,13 +65,14 @@
 | SCOPE-015 | 部署配置可移植化 | P0 | 启动链路全部从 `.env` 读取（端口/路径/Chrome 路径），清理硬编码端口与盘符，部署机无 E 盘、默认端口被占时改 `.env` 即可启动 |
 | SCOPE-016 | 目录库 CDP 调试功能 | P0 | 目录库每目录存默认调试端口；可一键拉起/关闭带该目录（`--user-data-dir`）的可见 Chrome，CDP 端口供外部脚本连接调试；Chrome 路径走 `CHROME_PATH` |
 | SCOPE-017 | 手动 Cookie 上报扩展 | P0 | 独立 MV3 Chrome 扩展「Cookie 一键上报」，以页面内可移动悬浮球为主入口，一键抓取当前页面 cookie 与请求头，手动填写 `channel/shop_name/mobile_phone/dns` 写回 `ods_cookie_playwright`；请求头经 `chrome.debugger`（CDP 通道）捕获当前域名 API 完整请求头（含受保护头）一并入库；不经映射表、无采集者概念；重复上传按四字段 upsert；没抓到 cookie 时支持刷新当前页面重抓；内置后端联通测试；纯粹独立、不挂平台前端 |
+| SCOPE-018 | Windows Service 化托管 | P0 | 生产后端注册为 Windows 服务（NSSM `SessionBackend`）：开机自启、崩溃自动重启、日志轮转；启动入口 `run_server.py`（先 `alembic upgrade head` 再起 uvicorn），路径自身推导不绑定盘符 |
 
 ### 2.2 不在本版本范围
 
 | 编号 | 内容 | 原因 |
 |---|---|---|
 | OUT-001 | 多节点/分布式执行架构 | 当前方案明确为单台 Windows 机器本机执行 |
-| OUT-002 | Docker、容器编排、Windows Service 化托管 | 参考材料明确第一版使用本地目录和 `start_backend.bat` |
+| OUT-002 | Docker、容器编排 | 部署形态为 Windows 原生：本地目录 + CMD/BAT 启动，生产由 Windows 服务托管（见 SCOPE-018），不引入容器 |
 | OUT-003 | 面向外部客户的多租户能力 | 当前定位是公司内部运维系统 |
 | OUT-004 | 自动绕过短信、扫码、验证码、设备验证 | 风控场景只提醒不自动处理，不做自动化冒险 |
 | OUT-005 | 自主 Agent 编排、多 Agent 协作 | 该产品是传统运维系统，不是 Agent 产品 |

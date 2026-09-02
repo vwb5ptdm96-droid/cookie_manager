@@ -11,8 +11,12 @@ session-maintenance-system/
 ├── backend/                 # FastAPI 后端 + Alembic
 ├── frontend/                # Vue 3 + Vite 前端
 ├── runtime/                 # 运行时目录，保存脚本、Profile、日志、产物
+├── tools/nssm/              # NSSM 服务包装器
 ├── .env.example             # 环境变量示例
-└── start_backend.bat        # Windows 后端启动脚本
+├── run_server.py            # Windows 服务启动入口（迁移 + uvicorn）
+├── start_backend.bat        # 后端启动脚本（开发/联调用，前台运行）
+├── restart_backend.bat      # 重启后端（服务模式）
+└── start.vbs                # 双击拉起前端开发服务器
 ```
 
 ## 环境要求
@@ -97,6 +101,42 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8081 --app-dir .
 
 - API: `http://127.0.0.1:<APP_PORT>`
 - 健康检查: `http://127.0.0.1:<APP_PORT>/api/health`
+
+## 以 Windows 服务运行后端（生产推荐）
+
+后端可注册为 Windows 服务，由 NSSM 托管：**开机自启、崩溃自动重启、日志落盘轮转**，不依赖登录会话和 SSH。
+
+### 服务文件
+
+- 服务名：`SessionBackend`
+- 启动入口：`run_server.py`（先执行 `alembic upgrade head`，再拉起 uvicorn；迁移失败返回非零退出码）
+- 服务包装器：`tools\nssm\nssm.exe`
+- 运行账号：`LocalSystem`
+- 日志：`runtime\logs\backend-uvicorn.out.log` / `backend-uvicorn.err.log`（10MB 自动轮转）
+
+### 注册 / 管理命令
+
+```powershell
+# 注册服务（仅首次）
+.\tools\nssm\nssm.exe install SessionBackend <python.exe路径> D:\<项目绝对路径>\run_server.py
+.\tools\nssm\nssm.exe set SessionBackend AppDirectory <项目绝对路径>
+.\tools\nssm\nssm.exe set SessionBackend Start SERVICE_AUTO_START
+
+# 日常管理
+.\tools\nssm\nssm.exe start SessionBackend    # 启动
+.\tools\nssm\nssm.exe stop SessionBackend     # 停止
+.\tools\nssm\nssm.exe restart SessionBackend  # 重启（或运行 restart_backend.bat）
+sc query SessionBackend                        # 查看状态
+
+# 卸载
+.\tools\nssm\nssm.exe remove SessionBackend confirm
+```
+
+注意：
+
+- 服务运行期间不要再用 `start_backend.bat` 或手工 `uvicorn` 起第二个实例，会撞 `APP_PORT`。
+- 启动入口 `run_server.py` 的所有路径按脚本自身位置推导，不绑定盘符，部署到任何目录均可直接复用。
+- 首次配置 `AppStdout` / `AppStderr` 指向 `runtime\logs\` 下两个文件，并建议 `AppExit Default Restart`（崩溃自动重启）+ `AppRestartDelay`。
 
 ## 启动前端
 

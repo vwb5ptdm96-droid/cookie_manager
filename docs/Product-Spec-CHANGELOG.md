@@ -1,5 +1,11 @@
 # Product Spec Changelog
 
+## 2026-09-01 · Windows Service 化托管（范围更新）
+
+- 新增：SCOPE-018 Windows Service 化托管——生产后端注册为 Windows 服务（NSSM `SessionBackend`）：开机自启、崩溃自动重启、日志轮转；启动入口 `run_server.py`（先 `alembic upgrade head` 再起 uvicorn），路径自身推导不绑定盘符。
+- 调整：SCOPE-001 备注由「使用 CMD/BAT 启动」改为「本地目录 + CMD/BAT 启动，生产托管为 Windows 服务」；OUT-002 移除「Windows Service 化托管」（已实现，转入 SCOPE-018），仅保留 Docker、容器编排不在范围，原因更新为 Windows 原生部署形态。
+- 影响：纯部署形态变更，不改变任何 API 与功能行为；运维命令见 README「以 Windows 服务运行后端」一节。
+
 ## 2026-09-01 · 修复：无 cron 任务不再自动兜底调度
 
 - 修复：ASM-003 原「未配置 cron 的任务每隔至少 5 分钟兜底执行一次」与前端「留空为仅手动触发」语义冲突——用户将任务设为手动（cron 留空）后仍被调度器每 5 分钟自动执行。改为「未配置 cron 的任务仅手动触发，调度器跳过不自动执行」。
