@@ -16,6 +16,21 @@ apscheduler>=3.11.0
 # ===== 数据库驱动 =====
 pymysql>=1.1.0
 
+# ===== 浏览器自动化 =====
+# 健康检测任务的修复脚本（runtime/scripts/*-cookie.py）由 LocalWindowsExecutor
+# 以后端解释器 sys.executable 执行，依赖 playwright 连接本机 Chrome CDP。
+# 缺失会导致修复阶段 ModuleNotFoundError，2026-09-02 重建 venv 曾因此遗漏。
+playwright>=1.62.0
+
+# ===== 脚本运行扩展依赖 =====
+# runtime/scripts 采集/验证脚本同用 backend venv 执行，除 playwright 外还需要：
+#   numpy/Pillow   —— slider_captcha.py（蝉圈圈滑块缺口识别）顶层 import
+# 重建 venv 需一并安装，否则对应任务 REPAIR 报 ModuleNotFoundError。
+# cv2(OpenCV)/Crypto(pycryptodome) 仅 slider_captcha 函数内延迟 import，触发滑块才用；
+# 且 cv2 对 Python 3.14 的 wheel 支持未验证，暂不列入必需清单。
+numpy>=2.5.2
+Pillow>=12.3.0
+
 # ===== FastAPI 依赖 =====
 python-multipart>=0.0.20
 
