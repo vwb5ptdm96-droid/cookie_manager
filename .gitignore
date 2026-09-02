@@ -30,3 +30,4 @@ tools/nssm/win32/
 tools/nssm/win64/
 tools/nssm-2.24.zip
 tools/_tmp_*.ps1
+tools/nssm/nssm.exe 
