@@ -10,3 +10,23 @@ coverage/
 runtime/
 .idea/
 .claude/
+
+# 日志与运行时产物
+*.log
+runtime-preview/
+
+# 数据库（运行时生成）
+*.db
+*.sqlite
+*.sqlite3
+
+# 打包压缩物
+*.zip
+
+# 第三方/临时工具
+handle.exe
+tools/nssm/src/
+tools/nssm/win32/
+tools/nssm/win64/
+tools/nssm-2.24.zip
+tools/_tmp_*.ps1
