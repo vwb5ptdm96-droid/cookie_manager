@@ -22,7 +22,9 @@ artifact_dir.joinpath("result.json").write_text(json.dumps({"status": "SUCCESS",
 """
 
 
-def bootstrap_dependencies(tmp_path: Path):
+def bootstrap_dependencies(tmp_path: Path, monkeypatch):
+    # 强制 legacy cookie 查询走本测试的 sqlite，不依赖外部 MySQL 配置
+    monkeypatch.setattr("app.services.health_check_service.create_mysql_engine", lambda: None)
     engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'checks.db'}")
     Base.metadata.create_all(engine)
     runtime_root = tmp_path / "runtime"
@@ -74,7 +76,6 @@ def bootstrap_dependencies(tmp_path: Path):
     profile_service.upsert(
         ProfilePayload(
             profile_key="profile_001",
-            task_id=None,
             relative_path="profiles/ks/demo-user",
         )
     )
@@ -106,8 +107,8 @@ def bootstrap_dependencies(tmp_path: Path):
     return engine, runtime_root, task
 
 
-def test_health_check_service_pass_result(tmp_path: Path) -> None:
-    engine, runtime_root, task = bootstrap_dependencies(tmp_path)
+def test_health_check_service_pass_result(tmp_path: Path, monkeypatch) -> None:
+    engine, runtime_root, task = bootstrap_dependencies(tmp_path, monkeypatch)
     service = HealthCheckService(
         engine=engine,
         runtime_root=runtime_root,
@@ -136,8 +137,8 @@ def test_health_check_service_pass_result(tmp_path: Path) -> None:
     assert result["triggered_task_code"] is None
 
 
-def test_health_check_service_failure_marks_task_expired_and_triggers_execute(tmp_path: Path) -> None:
-    engine, runtime_root, task = bootstrap_dependencies(tmp_path)
+def test_health_check_service_failure_marks_task_expired_and_triggers_execute(tmp_path: Path, monkeypatch) -> None:
+    engine, runtime_root, task = bootstrap_dependencies(tmp_path, monkeypatch)
     triggered = {"called": False}
 
     def fake_task_executor(task_id: int, task_code: str) -> dict[str, object]:
@@ -175,8 +176,8 @@ def test_health_check_service_failure_marks_task_expired_and_triggers_execute(tm
     assert triggered["called"] is True
 
 
-def test_health_check_service_failure_records_failure(tmp_path: Path) -> None:
-    engine, runtime_root, task = bootstrap_dependencies(tmp_path)
+def test_health_check_service_failure_records_failure(tmp_path: Path, monkeypatch) -> None:
+    engine, runtime_root, task = bootstrap_dependencies(tmp_path, monkeypatch)
     service = HealthCheckService(
         engine=engine,
         runtime_root=runtime_root,

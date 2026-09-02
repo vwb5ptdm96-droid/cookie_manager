@@ -80,7 +80,6 @@ def bootstrap_risk_context(tmp_path: Path):
     profile_service.upsert(
         ProfilePayload(
             profile_key="profile_001",
-            task_id=None,
             relative_path="profiles/ks/demo-user",
         )
     )

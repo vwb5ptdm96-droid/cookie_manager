@@ -34,7 +34,9 @@ class OkHandler(BaseHTTPRequestHandler):
         return
 
 
-def test_health_check_routes_create_and_execute(tmp_path: Path) -> None:
+def test_health_check_routes_create_and_execute(tmp_path: Path, monkeypatch) -> None:
+    # 强制 legacy cookie 查询走本测试的 sqlite，不依赖外部 MySQL 配置
+    monkeypatch.setattr("app.services.health_check_service.create_mysql_engine", lambda: None)
     engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'app.db'}")
     Base.metadata.create_all(engine)
     testing_session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)

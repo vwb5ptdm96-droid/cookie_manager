@@ -38,7 +38,6 @@ def bootstrap_dependencies(tmp_path: Path) -> tuple[object, Path]:
     profile_service.upsert(
         ProfilePayload(
             profile_key="profile_001",
-            task_id=None,
             relative_path="profiles/ks/demo-user",
         )
     )
