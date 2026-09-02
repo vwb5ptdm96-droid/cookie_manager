@@ -101,7 +101,7 @@ class RepairService:
             try:
                 result = self.health_check_executor(check_code)
             except AppError as exc:
-                result = {"status": "FAIL", "message": exc.message, "error_code": exc.code}
+                result = {"status": "FAIL", "message": exc.message, "error_code": exc.error_code}
             except Exception as exc:  # pragma: no cover - defensive fallback
                 result = {"status": "FAIL", "message": str(exc), "error_code": "REPAIR_VERIFY_FAILED"}
             results.append(result)
