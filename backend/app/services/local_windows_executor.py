@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Callable
 
 from app.services.process_runner import ProcessRunResult, run_process
 
@@ -16,6 +17,8 @@ class LocalWindowsExecutor:
         extra_env: dict[str, str] | None = None,
         run_id: str | None = None,
         control_file: str | None = None,
+        timeout_seconds: int | None = None,
+        on_start: Callable[[int], None] | None = None,
     ) -> dict[str, object]:
         stdout_path = artifact_dir / "stdout.log"
         stderr_path = artifact_dir / "stderr.log"
@@ -59,6 +62,8 @@ class LocalWindowsExecutor:
             stdout_path=stdout_path,
             stderr_path=stderr_path,
             extra_env=env,
+            timeout=timeout_seconds,
+            on_start=on_start,
         )
 
         # 合并 stdout + stderr 到 run.log
@@ -73,10 +78,18 @@ class LocalWindowsExecutor:
             payload = json.loads(result_path.read_text(encoding="utf-8"))
             payload["exit_code"] = exit_code
         else:
-            payload: dict[str, object] = {
-                "status": "SUCCESS" if exit_code == 0 else "FAIL",
-                "exit_code": exit_code,
-            }
+            if process_result.timed_out:
+                payload: dict[str, object] = {
+                    "status": "FAIL",
+                    "exit_code": exit_code,
+                    "error_message": f"执行超时（>{timeout_seconds}s），已终止进程树",
+                    "message": f"执行超时（>{timeout_seconds}s），已终止进程树",
+                }
+            else:
+                payload: dict[str, object] = {
+                    "status": "SUCCESS" if exit_code == 0 else "FAIL",
+                    "exit_code": exit_code,
+                }
 
         payload["pid"] = process_result.pid
         payload["stdout_path"] = process_result.stdout_path

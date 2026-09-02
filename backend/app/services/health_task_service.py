@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import subprocess
 import threading
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -43,6 +44,23 @@ ALLOWED_CHANNELS = {"KUAISHOU", "TAOBAO", "TMALL", "ALIMAMA", "JD", "PDD"}
 ALLOWED_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
 ALLOWED_RUN_MODES = {"HEADLESS", "HEADED"}
 RUNNING_STATUSES = {"PENDING", "RUNNING", "PAUSED", "CANCELING"}
+# 僵死执行实例宽限期：超过 (timeout_seconds + grace) 仍非终态才回收，防误杀刚启动的实例
+STALE_RUN_GRACE_SECONDS = 120
+
+
+def kill_process_tree(pid: int) -> None:
+    """Windows 下尽力强杀进程树（含子进程）。进程已不存在/失败一律静默。"""
+    if not pid:
+        return
+    try:
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(pid)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=15,
+        )
+    except Exception:
+        pass
 
 
 class HealthTaskService:
@@ -419,7 +437,7 @@ class HealthTaskService:
                 "REPAIR_NOT_CONFIGURED",
             )
 
-        # ── 1. 去重检查 ──
+        # ── 1. 去重检查（命中实例若全部超时僵死则就地回收后再放行，而非直接 DUPLICATE_RUN）──
         with Session(self.engine) as session:
             existing = (
                 session.execute(
@@ -433,11 +451,30 @@ class HealthTaskService:
                 .all()
             )
             if existing:
-                run_ids = ", ".join(e.run_id for e in existing)
-                raise AppError(
-                    f"相同脚本+目录的执行实例已存在（{run_ids}），跳过执行",
-                    "DUPLICATE_RUN",
-                )
+                reclaimed_any = False
+                now_dedup = beijing_now()
+                for e in list(existing):
+                    if self._reclaim_one(session, e, now_dedup):
+                        reclaimed_any = True
+                if reclaimed_any:
+                    session.commit()
+                    existing = (
+                        session.execute(
+                            select(ScriptRun).where(
+                                ScriptRun.script_id == row.repair_script_id,
+                                ScriptRun.directory_id == effective_directory_id,
+                                ScriptRun.status.in_(RUNNING_STATUSES),
+                            )
+                        )
+                        .scalars()
+                        .all()
+                    )
+                if existing:
+                    run_ids = ", ".join(e.run_id for e in existing)
+                    raise AppError(
+                        f"相同脚本+目录的执行实例已存在（{run_ids}），跳过执行",
+                        "DUPLICATE_RUN",
+                    )
 
         # ── 2. 读取关联资源 ──
         profile = self._get_profile(effective_directory_id)
@@ -539,9 +576,15 @@ class HealthTaskService:
             "TXY_PASSWORD": cfg.txy_password,
             "TXY_MOBILE_PHONE": row.mobile_phone or "",
         }
-        # 清理同目录的旧 Chrome 进程，避免连接旧实例或缓存污染
-        kill_chrome_for_profile(profile_absolute_path)
-        kill_chrome_on_port(cdp_port)
+        # 清理同目录的旧 Chrome 进程，避免连接旧实例或缓存污染。
+        # 清理失败只告警不中断：若在此抛错会跳过下方执行，留下 PENDING+已上锁。
+        try:
+            kill_chrome_for_profile(profile_absolute_path)
+            kill_chrome_on_port(cdp_port)
+        except Exception:
+            logger.exception("清理旧 Chrome 进程异常 run_id=%s", run_id)
+
+        timeout_seconds = row.repair_timeout_seconds or 600
         try:
             result = self.executor.execute(
                 script_path=script_path,
@@ -549,14 +592,21 @@ class HealthTaskService:
                 extra_env=extra_env,
                 run_id=run_id,
                 control_file=control_file,
+                timeout_seconds=timeout_seconds,
+                # 子进程一启动即落 RUNNING/pid/start_time；此后父进程无论怎么退出，
+                # 该 run 都有 pid 可核对、可被 reap 回收，不再留下不可辨的 PENDING 僵尸。
+                on_start=lambda pid: self._mark_running(run_id, pid),
             )
         except Exception as exc:
             self._handle_execution_error(run_id, row, profile, exc)
             raise AppError(f"执行脚本失败: {exc}", "EXECUTION_FAILED")
         finally:
-            # 脚本结束后清理 Chrome，确保不残留
-            kill_chrome_for_profile(profile_absolute_path)
-            kill_chrome_on_port(cdp_port)
+            # 脚本结束后清理 Chrome，确保不残留；异常只告警，不吞掉已就绪的结果
+            try:
+                kill_chrome_for_profile(profile_absolute_path)
+                kill_chrome_on_port(cdp_port)
+            except Exception:
+                logger.exception("清理 Chrome 异常 run_id=%s", run_id)
 
         end_time = beijing_now()
         duration_ms = int((end_time - start_time).total_seconds() * 1000)
@@ -585,14 +635,15 @@ class HealthTaskService:
             if result_path.exists():
                 sr.result_json = result_path.read_text(encoding="utf-8")
 
-            # 释放目录锁
+            # 释放目录锁：仅当锁仍指向本次 run 时释放，避免误清被后续实例更新的锁
             profile_row = session.execute(
                 select(ProfileRegistry).where(ProfileRegistry.id == effective_directory_id)
-            ).scalar_one()
-            profile_row.is_locked = False
-            profile_row.lock_owner = None
-            profile_row.lock_run_id = None
-            profile_row.locked_at = None
+            ).scalar_one_or_none()
+            if profile_row is not None and profile_row.lock_run_id == run_id:
+                profile_row.is_locked = False
+                profile_row.lock_owner = None
+                profile_row.lock_run_id = None
+                profile_row.locked_at = None
 
             # 更新 HealthTask
             row_ref = self._get_row(session, health_task_code)
@@ -649,6 +700,19 @@ class HealthTaskService:
 
         with Session(self.engine) as session:
             row = self._get_row(session, health_task_code)
+
+            # 先释放被本任务 run 占用的目录锁，避免删任务后目录永久锁死（两表无级联）
+            locked_run_ids = session.execute(
+                select(ScriptRun.run_id).where(ScriptRun.health_task_code == health_task_code)
+            ).scalars().all()
+            if locked_run_ids:
+                for profile_row in session.execute(
+                    select(ProfileRegistry).where(ProfileRegistry.lock_run_id.in_(locked_run_ids))
+                ).scalars().all():
+                    profile_row.is_locked = False
+                    profile_row.lock_owner = None
+                    profile_row.lock_run_id = None
+                    profile_row.locked_at = None
 
             session.execute(
                 delete(TaskRunLog).where(TaskRunLog.task_id == row.id)
@@ -786,6 +850,84 @@ class HealthTaskService:
         if p.is_absolute():
             return p
         return resolve_runtime_path(self.runtime_root, relative_path)
+
+    def _mark_running(self, run_id: str, pid: int) -> None:
+        """子进程一启动即落 RUNNING + pid + start_time（由 run_process 在 Popen 后回调）。
+
+        此前窗口（commit PENDING → Popen）父进程若退出，run 无 pid、无法与在跑实例
+        区分；本回调把窗口缩到最小，且保证此后 reap 能按 pid/时间核对与回收。
+        """
+        try:
+            with Session(self.engine) as session:
+                sr = session.execute(
+                    select(ScriptRun).where(ScriptRun.run_id == run_id)
+                ).scalar_one_or_none()
+                if sr is not None:
+                    sr.status = "RUNNING"
+                    sr.pid = pid
+                    sr.start_time = sr.start_time or beijing_now()
+                    session.commit()
+        except Exception:
+            logger.exception("标记 ScriptRun RUNNING 失败 run_id=%s pid=%s", run_id, pid)
+
+    @staticmethod
+    def _run_base_time(run: ScriptRun, now: datetime) -> datetime:
+        """回收判定的基准时间。
+
+        start_time 为本地时间（beijing_now 写入）；created_at 为 DB func.now()
+        （SQLite 存 UTC naive）。start_time 缺失（父进程死在写 start 前）的记录，
+        把 created_at 折算 +8h 到本地，避免时区差导致被误判为立即超时。
+        """
+        if run.start_time is not None:
+            return run.start_time
+        if run.created_at is not None:
+            return run.created_at + timedelta(hours=8)
+        return now
+
+    def _is_run_stale(self, run: ScriptRun, now: datetime) -> bool:
+        timeout = run.timeout_seconds or 600
+        return now >= (self._run_base_time(run, now) + timedelta(seconds=timeout + STALE_RUN_GRACE_SECONDS))
+
+    def _reclaim_one(self, session: Session, run: ScriptRun, now: datetime) -> bool:
+        """单条回收（同事务内）：仅当确实僵死才执行，返回是否回收。"""
+        if not self._is_run_stale(run, now):
+            return False
+        if run.pid:
+            kill_process_tree(run.pid)
+        run.status = "FAIL"
+        run.end_time = now
+        run.error_message = "STALE_RUN_RECLAIM: 前次实例超时僵死，启动本次执行前自动回收"
+        if run.directory_id is not None:
+            profile_row = session.execute(
+                select(ProfileRegistry).where(ProfileRegistry.id == run.directory_id)
+            ).scalar_one_or_none()
+            # 仅当锁仍指向本 run 才释放，避免误清被后续实例更新的锁
+            if profile_row is not None and profile_row.lock_run_id == run.run_id:
+                profile_row.is_locked = False
+                profile_row.lock_owner = None
+                profile_row.lock_run_id = None
+                profile_row.locked_at = None
+        return True
+
+    def reap_stale_runs(self) -> int:
+        """回收所有超时未收尾的 ScriptRun，并同步释放对应目录锁（幂等）。
+
+        由调度每 tick 调用；也可在执行前惰性调用。返回回收条数。
+        """
+        now = beijing_now()
+        reclaimed = 0
+        with Session(self.engine) as session:
+            runs = session.execute(
+                select(ScriptRun).where(ScriptRun.status.in_(RUNNING_STATUSES))
+            ).scalars().all()
+            for run in runs:
+                if self._reclaim_one(session, run, now):
+                    reclaimed += 1
+            if reclaimed:
+                session.commit()
+        if reclaimed:
+            logger.warning("reap_stale_runs: 自动回收 %s 条僵死执行记录", reclaimed)
+        return reclaimed
 
     def _handle_execution_error(
         self, run_id: str, task: HealthTask, profile: dict[str, object], exc: Exception

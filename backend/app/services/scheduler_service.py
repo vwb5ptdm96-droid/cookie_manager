@@ -45,6 +45,12 @@ class HealthTaskScheduler:
         now = datetime.now()
         service = HealthTaskService(engine=self.engine, runtime_root=self.runtime_root)
 
+        # 回收超时未收尾的僵死执行实例并同步释放目录锁（防僵尸 run / 孤锁积压）
+        try:
+            service.reap_stale_runs()
+        except Exception:
+            logger.exception("调度回收僵死执行实例异常")
+
         with Session(self.engine) as session:
             tasks = session.execute(
                 select(HealthTask).where(HealthTask.enabled.is_(True))
