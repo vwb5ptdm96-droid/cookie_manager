@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from uuid import uuid4
 
@@ -8,9 +9,12 @@ from sqlalchemy import Engine, select
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError
+from app.core.path_utils import resolve_runtime_path
 from app.models.health_task import HealthTask
 from app.models.script_registry import ScriptRegistry
 from app.models.script_run import ScriptRun
+
+logger = logging.getLogger(__name__)
 
 ALLOWED_STATUSES = {
     "PENDING",
@@ -161,6 +165,56 @@ class ScriptRunService:
             if row.result_json:
                 return json.loads(row.result_json)
             return {"status": "UNKNOWN", "message": "无结果数据"}
+
+    # ── 方案A：自动排障自愈挂载入口 ──
+
+    def handle_run_failure(
+        self, run_id: str, error_message: str | None = None
+    ) -> None:
+        """
+        当某个 ScriptRun 执行失败（FAIL）时调用：
+        自动关联脚本元数据（脚本物理路径、CDP端口、店铺/渠道），创建 RepairTicket 并唤起 Claude Code 排障。
+        """
+        with Session(self.engine) as session:
+            row = session.execute(
+                select(ScriptRun).where(ScriptRun.run_id == run_id)
+            ).scalar_one_or_none()
+            if row is None:
+                logger.warning(f"[AutoRepair] 未找到 run_id={run_id} 的运行记录，跳过自动排障")
+                return
+
+            # 查询关联的脚本信息（获取 main_file, script_dir, default_cdp_port 等）
+            script_path = ""
+            cdp_port = 9222
+            channel = "未知渠道"
+            shop_name = "未知店铺"
+
+            if row.script_code:
+                reg = session.execute(
+                    select(ScriptRegistry).where(ScriptRegistry.script_code == row.script_code)
+                ).scalar_one_or_none()
+                if reg:
+                    absolute_dir = resolve_runtime_path(self.runtime_root, reg.script_dir)
+                    script_path = str(absolute_dir / reg.main_file)
+                    cdp_port = reg.default_cdp_port or 9222
+                    channel = reg.platform or "未知渠道"
+                    shop_name = reg.script_name or "未知店铺"
+
+            err_msg = error_message or row.error_message or "脚本执行异常退出 (FAIL)"
+
+            try:
+                from app.services.repair_service_extension import RepairServiceAutoExtension
+                RepairServiceAutoExtension.handle_script_failure(
+                    db=session,
+                    script_run_id=row.id,
+                    script_path=script_path,
+                    channel=channel,
+                    shop_name=shop_name,
+                    cdp_port=cdp_port,
+                    error_message=err_msg
+                )
+            except Exception as e:
+                logger.error(f"[AutoRepair] 触发自动维修失败: {e}", exc_info=True)
 
     # ── 内部 ──
 

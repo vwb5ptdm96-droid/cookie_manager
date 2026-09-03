@@ -68,12 +68,9 @@ class HealthTaskService:
         self.engine = engine
         self.runtime_root = runtime_root
         self.executor = LocalWindowsExecutor()
-        # cookie 查询走云端 MySQL，本地 SQLite 没有 ods 表
         cookie_engine = create_mysql_engine() or engine
         self.legacy_cookie_service = LegacyCookieService(engine=cookie_engine)
         self.log_service = RunLogService(engine=engine)
-
-    # ── Chrome 进程清理 ──
 
     # ── CRUD ──
 
@@ -186,7 +183,6 @@ class HealthTaskService:
             return self._serialize(row)
 
     def clone_task(self, health_task_code: str) -> dict[str, object]:
-        """复制一个健康检测任务，生成新的编码和名称（副本）。"""
         with Session(self.engine) as session:
             source = self._get_row(session, health_task_code)
             new_code = f"ht_{uuid4().hex[:10]}"
@@ -226,7 +222,6 @@ class HealthTaskService:
     # ── 执行 ──
 
     def execute_check(self, health_task_code: str) -> dict[str, object]:
-        """立即执行检测：查 cookie → 发请求 → 评规则 → 记日志。"""
         run_id = f"check_{uuid4().hex[:12]}"
         steps: list[str] = []
 
@@ -242,7 +237,6 @@ class HealthTaskService:
             add_step(f"开始检测: {row.health_task_name}")
             add_step(f"目标: {row.http_method} {row.check_url}")
 
-            # ── 1. 查 cookie ──
             cookie_headers: dict[str, str] = {}
             try:
                 legacy_record = self.legacy_cookie_service.get_by_lookup(
@@ -261,7 +255,6 @@ class HealthTaskService:
                         try:
                             parsed = json.loads(cookie_json) if isinstance(cookie_json, str) else cookie_json
                             if isinstance(parsed, list):
-                                # JSON 数组：[{"name":"c1","value":"v1"}, ...]
                                 cookie_parts = []
                                 for c in parsed:
                                     if isinstance(c, dict) and "name" in c and "value" in c:
@@ -272,7 +265,6 @@ class HealthTaskService:
                                 cookie_headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in parsed.items())
                         except json.JSONDecodeError:
                             pass
-                    # 如果 JSON cookie 未解析出内容，回退到 str_cookie
                     if "Cookie" not in cookie_headers:
                         str_cookie = legacy_record.get("str_cookie")
                         if isinstance(str_cookie, str) and str_cookie.strip():
@@ -284,7 +276,6 @@ class HealthTaskService:
             except Exception as exc:
                 add_step(f"⚠️ cookie 查询异常: {exc}")
 
-            # ── 2. 组装请求 ──
             request_headers: dict[str, str] = dict(cookie_headers)
             if row.http_headers:
                 try:
@@ -301,7 +292,6 @@ class HealthTaskService:
                 except json.JSONDecodeError:
                     request_body = row.http_body
 
-            # ── 3. 发 HTTP 请求 ──
             response_body_preview = ""
             try:
                 response = perform_health_request(
@@ -323,7 +313,6 @@ class HealthTaskService:
                 add_step(f"✅ HTTP 请求完成: 状态码 {response_status}")
                 add_step(f"响应内容:\n{masked_body[:2000]}")
 
-                # ── 4. 评规则 ──
                 failure_hit = self._match_rule(row.failure_rule, response_status, response_body)
                 success_rule_exists = bool(row.success_rule)
                 success_hit = self._match_rule(row.success_rule, response_status, response_body)
@@ -364,7 +353,6 @@ class HealthTaskService:
             session.commit()
             session.refresh(row)
 
-        # ── 5. 失败时飞书通知 ──
         if row.status == "FAIL":
             try:
                 send_feishu_notification(
@@ -381,7 +369,6 @@ class HealthTaskService:
             except Exception:
                 logger.exception("发送飞书通知异常")
 
-            # ── 6. 自动修复（如果配置了） ──
             if row.auto_repair_enabled and row.repair_script_id:
                 try:
                     logger.info("检测失败，自动触发修复: %s", health_task_code)
@@ -404,12 +391,10 @@ class HealthTaskService:
         return result
 
     def execute_repair(self, health_task_code: str) -> dict[str, object]:
-        """完整修复流程：串行排队 → 去重检查 → 目录锁 → 创建 ScriptRun → 执行 → 释放锁 → 更新状态。"""
         with _repair_lock:
             return self._do_execute_repair(health_task_code, force=False)
 
     def execute_scheduled_repair(self, health_task_code: str) -> dict[str, object]:
-        """调度触发的修复执行，跳过 auto_repair_enabled 检查。"""
         with _repair_lock:
             return self._do_execute_repair(health_task_code, force=True)
 
@@ -423,7 +408,6 @@ class HealthTaskService:
         if not row.repair_script_id:
             raise AppError("未配置修复脚本", "REPAIR_NOT_CONFIGURED")
 
-        # ── 0. 确定启动目录：优先脚本库关联的目录，其次健康检测任务配置 ──
         script = self._get_script(row.repair_script_id)
         script_profile_key = script.get("profile_key")
         if script_profile_key:
@@ -437,7 +421,6 @@ class HealthTaskService:
                 "REPAIR_NOT_CONFIGURED",
             )
 
-        # ── 1. 去重检查（命中实例若全部超时僵死则就地回收后再放行，而非直接 DUPLICATE_RUN）──
         with Session(self.engine) as session:
             existing = (
                 session.execute(
@@ -476,7 +459,6 @@ class HealthTaskService:
                         "DUPLICATE_RUN",
                     )
 
-        # ── 2. 读取关联资源 ──
         profile = self._get_profile(effective_directory_id)
         profile_absolute_path = self._resolve_profile_path(profile["relative_path"])
         script_absolute_dir = resolve_runtime_path(self.runtime_root, script["script_dir"])
@@ -484,13 +466,11 @@ class HealthTaskService:
 
         run_mode = row.repair_run_mode or script["default_run_mode"] or "HEADLESS"
 
-        # ── 3. 创建 artifact 目录 ──
         run_id = f"run_{uuid4().hex[:12]}"
         artifact_dir = self.runtime_root / "artifacts" / "runs" / run_id
         artifact_dir.mkdir(parents=True, exist_ok=True)
         control_file = str(artifact_dir / "control.json")
 
-        # ── 4. 写入 config.json ──
         config = {
             "run_id": run_id,
             "health_task": {
@@ -524,7 +504,6 @@ class HealthTaskService:
             json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8"
         )
 
-        # ── 5. 创建 ScriptRun + 锁定目录 ──
         with Session(self.engine) as session:
             sr = ScriptRun(
                 run_id=run_id,
@@ -543,7 +522,6 @@ class HealthTaskService:
             )
             session.add(sr)
 
-            # 锁定目录
             profile_row = session.execute(
                 select(ProfileRegistry).where(ProfileRegistry.id == effective_directory_id)
             ).scalar_one()
@@ -556,7 +534,6 @@ class HealthTaskService:
 
             session.commit()
 
-        # ── 6. 执行脚本 ──
         start_time = beijing_now()
         cfg = get_settings()
         cdp_port = script.get("default_cdp_port") or 9222
@@ -576,8 +553,6 @@ class HealthTaskService:
             "TXY_PASSWORD": cfg.txy_password,
             "TXY_MOBILE_PHONE": row.mobile_phone or "",
         }
-        # 清理同目录的旧 Chrome 进程，避免连接旧实例或缓存污染。
-        # 清理失败只告警不中断：若在此抛错会跳过下方执行，留下 PENDING+已上锁。
         try:
             kill_chrome_for_profile(profile_absolute_path)
             kill_chrome_on_port(cdp_port)
@@ -585,6 +560,7 @@ class HealthTaskService:
             logger.exception("清理旧 Chrome 进程异常 run_id=%s", run_id)
 
         timeout_seconds = row.repair_timeout_seconds or 600
+        execution_failed = False
         try:
             result = self.executor.execute(
                 script_path=script_path,
@@ -593,25 +569,25 @@ class HealthTaskService:
                 run_id=run_id,
                 control_file=control_file,
                 timeout_seconds=timeout_seconds,
-                # 子进程一启动即落 RUNNING/pid/start_time；此后父进程无论怎么退出，
-                # 该 run 都有 pid 可核对、可被 reap 回收，不再留下不可辨的 PENDING 僵尸。
                 on_start=lambda pid: self._mark_running(run_id, pid),
             )
+            if result.get("status") not in ("SUCCESS", "RISK"):
+                execution_failed = True
         except Exception as exc:
-            self._handle_execution_error(run_id, row, profile, exc)
+            execution_failed = True
+            self._handle_execution_error(run_id, row, profile, exc, script_path=str(script_path), cdp_port=cdp_port)
             raise AppError(f"执行脚本失败: {exc}", "EXECUTION_FAILED")
         finally:
-            # 脚本结束后清理 Chrome，确保不残留；异常只告警，不吞掉已就绪的结果
-            try:
-                kill_chrome_for_profile(profile_absolute_path)
-                kill_chrome_on_port(cdp_port)
-            except Exception:
-                logger.exception("清理 Chrome 异常 run_id=%s", run_id)
+            if not execution_failed:
+                try:
+                    kill_chrome_for_profile(profile_absolute_path)
+                    kill_chrome_on_port(cdp_port)
+                except Exception:
+                    logger.exception("清理 Chrome 异常 run_id=%s", run_id)
 
         end_time = beijing_now()
         duration_ms = int((end_time - start_time).total_seconds() * 1000)
 
-        # ── 7. 更新状态 ──
         status = result.get("status", "FAIL")
         exit_code = result.get("exit_code", -1)
         log_path = result.get("log_path")
@@ -635,7 +611,6 @@ class HealthTaskService:
             if result_path.exists():
                 sr.result_json = result_path.read_text(encoding="utf-8")
 
-            # 释放目录锁：仅当锁仍指向本次 run 时释放，避免误清被后续实例更新的锁
             profile_row = session.execute(
                 select(ProfileRegistry).where(ProfileRegistry.id == effective_directory_id)
             ).scalar_one_or_none()
@@ -645,7 +620,6 @@ class HealthTaskService:
                 profile_row.lock_run_id = None
                 profile_row.locked_at = None
 
-            # 更新 HealthTask
             row_ref = self._get_row(session, health_task_code)
             row_ref.last_run_status = status
             row_ref.last_repair_run_id = run_id
@@ -658,7 +632,6 @@ class HealthTaskService:
                 row_ref.status = "PENDING"
                 risk_message = result.get("message", result.get("risk_type", "RISK"))
                 row_ref.last_result_message = risk_message
-                # 风控只发飞书提醒，不创建人工修复工单
                 try:
                     send_feishu_notification(
                         title=f"修复遇风控: {row_ref.health_task_name or health_task_code}",
@@ -675,11 +648,23 @@ class HealthTaskService:
                     logger.exception("发送风控飞书通知异常 [%s]", health_task_code)
             else:
                 row_ref.status = "FAIL"
+                try:
+                    from app.services.repair_service_extension import RepairServiceAutoExtension
+                    RepairServiceAutoExtension.handle_script_failure(
+                        db=session,
+                        script_run_id=sr.id,
+                        script_path=str(script_path),
+                        channel=row.channel,
+                        shop_name=row.shop_name or "",
+                        cdp_port=cdp_port,
+                        error_message=result.get("error_message") or result.get("message") or "修复脚本执行失败 (FAIL)",
+                    )
+                except Exception as e:
+                    logger.error(f"[AutoRepair] 触发自动维修失败: {e}", exc_info=True)
 
             session.commit()
             session.refresh(row_ref)
 
-            # 写入 REPAIR 运行日志（Spec REQ-006），在状态提交后执行避免锁冲突
             self.log_service.write(
                 run_id=run_id,
                 run_type="REPAIR",
@@ -693,7 +678,6 @@ class HealthTaskService:
             return self._serialize(row_ref)
 
     def delete_task(self, health_task_code: str) -> None:
-        """删除健康检测任务及关联的 run_log 和 script_run 记录。"""
         from app.models.run_log import TaskRunLog
         from app.models.script_run import ScriptRun
         from sqlalchemy import delete
@@ -701,7 +685,6 @@ class HealthTaskService:
         with Session(self.engine) as session:
             row = self._get_row(session, health_task_code)
 
-            # 先释放被本任务 run 占用的目录锁，避免删任务后目录永久锁死（两表无级联）
             locked_run_ids = session.execute(
                 select(ScriptRun.run_id).where(ScriptRun.health_task_code == health_task_code)
             ).scalars().all()
@@ -726,14 +709,12 @@ class HealthTaskService:
     # ── 时间线 ──
 
     def get_timeline(self, health_task_code: str) -> list[dict[str, object]]:
-        """聚合该任务的所有检测和修复执行记录，按时间排序。"""
         from app.models.run_log import TaskRunLog
         from app.models.script_run import ScriptRun
 
         with Session(self.engine) as session:
             task = self._get_row(session, health_task_code)
 
-            # 1) 检测日志 (task_run_log)
             check_logs: list[dict[str, object]] = []
             log_rows = session.execute(
                 select(TaskRunLog).where(
@@ -750,7 +731,6 @@ class HealthTaskService:
                     "detail": log.message,
                 })
 
-            # 2) 修复脚本执行 (script_run)
             repair_logs: list[dict[str, object]] = []
             script_rows = session.execute(
                 select(ScriptRun).where(
@@ -783,7 +763,6 @@ class HealthTaskService:
                     "detail": log_content,
                 })
 
-            # 3) 合并按时间倒序（最近在前）
             timeline = check_logs + repair_logs
             timeline.sort(key=lambda x: x["time"], reverse=True)
             return timeline
@@ -852,11 +831,6 @@ class HealthTaskService:
         return resolve_runtime_path(self.runtime_root, relative_path)
 
     def _mark_running(self, run_id: str, pid: int) -> None:
-        """子进程一启动即落 RUNNING + pid + start_time（由 run_process 在 Popen 后回调）。
-
-        此前窗口（commit PENDING → Popen）父进程若退出，run 无 pid、无法与在跑实例
-        区分；本回调把窗口缩到最小，且保证此后 reap 能按 pid/时间核对与回收。
-        """
         try:
             with Session(self.engine) as session:
                 sr = session.execute(
@@ -872,12 +846,6 @@ class HealthTaskService:
 
     @staticmethod
     def _run_base_time(run: ScriptRun, now: datetime) -> datetime:
-        """回收判定的基准时间。
-
-        start_time 为本地时间（beijing_now 写入）；created_at 为 DB func.now()
-        （SQLite 存 UTC naive）。start_time 缺失（父进程死在写 start 前）的记录，
-        把 created_at 折算 +8h 到本地，避免时区差导致被误判为立即超时。
-        """
         if run.start_time is not None:
             return run.start_time
         if run.created_at is not None:
@@ -889,7 +857,6 @@ class HealthTaskService:
         return now >= (self._run_base_time(run, now) + timedelta(seconds=timeout + STALE_RUN_GRACE_SECONDS))
 
     def _reclaim_one(self, session: Session, run: ScriptRun, now: datetime) -> bool:
-        """单条回收（同事务内）：仅当确实僵死才执行，返回是否回收。"""
         if not self._is_run_stale(run, now):
             return False
         if run.pid:
@@ -901,7 +868,6 @@ class HealthTaskService:
             profile_row = session.execute(
                 select(ProfileRegistry).where(ProfileRegistry.id == run.directory_id)
             ).scalar_one_or_none()
-            # 仅当锁仍指向本 run 才释放，避免误清被后续实例更新的锁
             if profile_row is not None and profile_row.lock_run_id == run.run_id:
                 profile_row.is_locked = False
                 profile_row.lock_owner = None
@@ -910,10 +876,6 @@ class HealthTaskService:
         return True
 
     def reap_stale_runs(self) -> int:
-        """回收所有超时未收尾的 ScriptRun，并同步释放对应目录锁（幂等）。
-
-        由调度每 tick 调用；也可在执行前惰性调用。返回回收条数。
-        """
         now = beijing_now()
         reclaimed = 0
         with Session(self.engine) as session:
@@ -930,9 +892,14 @@ class HealthTaskService:
         return reclaimed
 
     def _handle_execution_error(
-        self, run_id: str, task: HealthTask, profile: dict[str, object], exc: Exception
+        self,
+        run_id: str,
+        task: HealthTask,
+        profile: dict[str, object],
+        exc: Exception,
+        script_path: str = "",
+        cdp_port: int = 9222
     ) -> None:
-        """脚本执行异常时的清理：释放锁、标记失败。"""
         with Session(self.engine) as session:
             sr = session.execute(
                 select(ScriptRun).where(ScriptRun.run_id == run_id)
@@ -954,6 +921,21 @@ class HealthTaskService:
             task_ref = self._get_row(session, task.health_task_code)
             task_ref.last_run_status = "FAIL"
             task_ref.last_result_message = str(exc)
+
+            if sr and script_path:
+                try:
+                    from app.services.repair_service_extension import RepairServiceAutoExtension
+                    RepairServiceAutoExtension.handle_script_failure(
+                        db=session,
+                        script_run_id=sr.id,
+                        script_path=script_path,
+                        channel=task.channel,
+                        shop_name=task.shop_name or "",
+                        cdp_port=cdp_port,
+                        error_message=f"执行异常崩溃: {exc}",
+                    )
+                except Exception as e:
+                    logger.error(f"[AutoRepair] 异常处理中触发自动维修失败: {e}", exc_info=True)
 
             session.commit()
 
@@ -979,14 +961,9 @@ class HealthTaskService:
 
     @staticmethod
     def _mask_sensitive(text: str) -> str:
-        """对可能含敏感信息的文本做脱敏：cookie/token/密码/手机号/验证码等。
-
-        Spec 6.3 / §8 隐私 P0：日志和通知不得明文记录 cookie、凭证或密码。
-        """
         if not text:
             return text
         masked = text
-        # 1. JSON 键值对中的敏感键：`"key": "value"` → 值整体打码
         sensitive_keys = re.compile(
             r'(?i)("(?:cookie|set-cookie|token|access_token|refresh_token|'
             r'password|passwd|secret|api[_-]?key|authorization|captcha|sms[_-]?code|'
@@ -999,14 +976,12 @@ class HealthTaskService:
 
         masked = sensitive_keys.sub(_mask_value, masked)
 
-        # 2. 裸 Bearer / Basic 令牌
         masked = re.sub(
             r"(?i)(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}",
             r"\1 ***",
             masked,
         )
 
-        # 3. 11 位中国大陆手机号
         masked = re.sub(
             r"(?<!\d)1[3-9]\d{9}(?!\d)",
             "138****0000",
@@ -1031,13 +1006,11 @@ class HealthTaskService:
         if "contains" in rule:
             pattern = rule["contains"]
             if isinstance(pattern, str):
-                # 正则匹配整个响应体
                 body_str = json.dumps(body, ensure_ascii=False) if body is not None else str(body)
                 try:
                     return bool(re.search(pattern, body_str))
                 except re.error:
                     return pattern in body_str
-            # 兼容旧格式：{contains: {path, value}}
             if isinstance(pattern, dict):
                 path = str(pattern.get("path", ""))
                 expected = str(pattern.get("value", ""))
@@ -1047,10 +1020,8 @@ class HealthTaskService:
         if "equals" in rule:
             val = rule["equals"]
             if isinstance(val, str):
-                # 直接比较整个响应体
                 body_str = json.dumps(body, ensure_ascii=False) if body is not None else str(body)
                 return val == body_str
-            # 兼容旧格式：{equals: {path, value}}
             if isinstance(val, dict):
                 path = str(val.get("path", ""))
                 expected = val.get("value", "")
@@ -1104,6 +1075,6 @@ class HealthTaskService:
             "last_run_status": row.last_run_status,
             "last_result_message": row.last_result_message,
             "last_repaired_at": row.last_repaired_at,
-            "last_repair_run_id": row.last_repair_run_id,
+            "last_repair_run_id": row.last_repaired_at,
             "updated_at": row.updated_at,
         }
