@@ -1,5 +1,13 @@
 # Product Spec Changelog
 
+## 2026-09-03 · 自动排障闭环（Claude Code 排障）
+
+- 新增：SCOPE-019 自动排障闭环（后端）——修复脚本返回 `FAIL`/抛异常/返回 `RISK`(风控) 时自动生成自动排障工单（独立于已废弃人工工单），按落库冷却/预算节流唤起本机 Claude Code 连接 CDP 现场排障，结果回写 SOLVED/NEED_HUMAN，NEED_HUMAN 关端口 + 飞书转人工；SCOPE-020 自动排障工单前端列表页（P1 排后）。
+- 新增：TASK-007、FLOW-007、REQ-011、数据模型 `AutoRepairTicket`、DEP-012（Claude Code CLI）。
+- 反转：ASM-004 由「风控仅飞书提醒、不做人工修复闭环」改为「风控进入自动排障闭环，遇人机验证即停转人工」；AI 能力规格由「本版本不包含 AI」改为引入单一定向排障 agent；§11 Agent 系统规格由「不适用」改为定向排障 agent 规格（运行边界/工具集/安全护栏）。
+- 定界：OUT-004/012/013——排障 agent 禁止自动绕过或完成人机验证（滑块/拼图/短信/扫码/设备验证），识别即 NEED_HUMAN 停止；账号级破坏性操作不无人值守执行；多 Agent 协作与自主编排仍不在范围（OUT-005）。
+- 影响：人工修复工单（ManualRepairTicket）维持废弃（OUT-007 不变）；自动排障工单用独立新模型，不影响既有健康检测/修复/采集主链路。内部机先行草稿（dispatcher/extension 坏实现，commit b78cc23）按本文档重建。
+
 ## 2026-09-01 · Windows Service 化托管（范围更新）
 
 - 新增：SCOPE-018 Windows Service 化托管——生产后端注册为 Windows 服务（NSSM `SessionBackend`）：开机自启、崩溃自动重启、日志轮转；启动入口 `run_server.py`（先 `alembic upgrade head` 再起 uvicorn），路径自身推导不绑定盘符。
