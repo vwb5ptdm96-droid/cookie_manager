@@ -2,7 +2,9 @@
 
 # Windows 原生 Session 维护任务系统
 
-内部运维工作台，用于管理会话维护任务、健康检查、脚本库、Profile、人工修复工单、环境自检和运行日志。
+内部运维工作台，用于管理会话健康检测任务、脚本库、Profile 目录库、脚本运行、Cookie 扩展采集与一键上报、自动排障（Claude Code）、环境自检和运行日志。
+
+> 说明：早期版本中的独立「维护任务」「旧健康检测」「人工修复工单」模块已废弃（Spec OUT-007/008），由健康检测任务统一取代；修复失败现走飞书提醒或自动排障闭环（SCOPE-019），不再生成人工工单。
 
 ## 目录结构
 
@@ -11,17 +13,18 @@ session-maintenance-system/
 ├── backend/                 # FastAPI 后端 + Alembic
 ├── frontend/                # Vue 3 + Vite 前端
 ├── runtime/                 # 运行时目录，保存脚本、Profile、日志、产物
-├── tools/nssm/              # NSSM 服务包装器
+├── tools/watchdog.py        # 生产健康探针（计划任务 SessionBackend-Watchdog 调用）
 ├── .env.example             # 环境变量示例
-├── run_server.py            # Windows 服务启动入口（迁移 + uvicorn）
-├── start_backend.bat        # 后端启动脚本（开发/联调用，前台运行）
-├── restart_backend.bat      # 重启后端（服务模式）
-└── start.vbs                # 双击拉起前端开发服务器
+├── run_server.py            # 生产启动入口（alembic 迁移 + uvicorn，轮转日志）
+├── start_interactive.bat    # 生产启动脚本（计划任务调用，优先 backend\.venv）
+├── start_backend.bat        # 开发启动脚本（前台运行）
+├── restart_backend.bat      # 生产重启后端（杀 8081 + 计划任务 end/run）
+└── start.vbs                # 双击拉起开发后端+前端（仅开发用）
 ```
 
 ## 环境要求
 
-- Windows 10 / Windows Server，人工修复链路需要桌面会话或 RDP。
+- Windows 10 / Windows Server；生产后端以计划任务运行在交互会话，自动排障 / 有头 Chrome 需登录桌面可见。
 - Python 3.11。
 - Node.js 20+。
 - `pnpm`。
@@ -102,41 +105,38 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8081 --app-dir .
 - API: `http://127.0.0.1:<APP_PORT>`
 - 健康检查: `http://127.0.0.1:<APP_PORT>/api/health`
 
-## 以 Windows 服务运行后端（生产推荐）
+## 以计划任务运行后端（生产）
 
-后端可注册为 Windows 服务，由 NSSM 托管：**开机自启、崩溃自动重启、日志落盘轮转**，不依赖登录会话和 SSH。
+生产环境唯一入口是**计划任务**，在交互会话下运行（有头 Chrome 窗口可见）；不要在生产机器上手动起 uvicorn，以免与计划任务冲突（端口 8081）。
 
-### 服务文件
+| 入口 | 用途 | 说明 |
+|---|---|---|
+| 计划任务 `SessionBackend-Interactive` | **生产唯一入口** | `cmd /c start_interactive.bat` → `run_server.py`（先 alembic 迁移再起 uvicorn），在交互会话运行 |
+| `start_interactive.bat` | 生产启动脚本 | 被计划任务调用；优先 `backend\.venv\Scripts\python.exe`；日志由 `run_server.py` 写入 `runtime/logs/backend.log`（10MB×5 轮转） |
+| `restart_backend.bat` | 生产重启脚本 | 杀 8081 监听进程 → `schtasks /end` 残留实例 → `/run` 重新拉起 |
+| `tools/watchdog.py` | 生产健康探针 | 端口 / SQLite / RDS 探活 + 飞书告警（计划任务 `SessionBackend-Watchdog`） |
 
-- 服务名：`SessionBackend`
-- 启动入口：`run_server.py`（先执行 `alembic upgrade head`，再拉起 uvicorn；迁移失败返回非零退出码）
-- 服务包装器：`tools\nssm\nssm.exe`
-- 运行账号：`LocalSystem`
-- 日志：`runtime\logs\backend-uvicorn.out.log` / `backend-uvicorn.err.log`（10MB 自动轮转）
+日常操作：
 
-### 注册 / 管理命令
-
-```powershell
-# 注册服务（仅首次）
-.\tools\nssm\nssm.exe install SessionBackend <python.exe路径> D:\<项目绝对路径>\run_server.py
-.\tools\nssm\nssm.exe set SessionBackend AppDirectory <项目绝对路径>
-.\tools\nssm\nssm.exe set SessionBackend Start SERVICE_AUTO_START
-
-# 日常管理
-.\tools\nssm\nssm.exe start SessionBackend    # 启动
-.\tools\nssm\nssm.exe stop SessionBackend     # 停止
-.\tools\nssm\nssm.exe restart SessionBackend  # 重启（或运行 restart_backend.bat）
-sc query SessionBackend                        # 查看状态
-
-# 卸载
-.\tools\nssm\nssm.exe remove SessionBackend confirm
+```bat
+:: 启动
+schtasks /run /tn SessionBackend-Interactive
+:: 重启（先 /end 再 /run，见下方注意）
+restart_backend.bat
+:: 停止
+schtasks /end /tn SessionBackend-Interactive
+:: 查看 8081 监听状态
+netstat -ano | findstr :8081
 ```
 
 注意：
 
-- 服务运行期间不要再用 `start_backend.bat` 或手工 `uvicorn` 起第二个实例，会撞 `APP_PORT`。
-- 启动入口 `run_server.py` 的所有路径按脚本自身位置推导，不绑定盘符，部署到任何目录均可直接复用。
-- 首次配置 `AppStdout` / `AppStderr` 指向 `runtime\logs\` 下两个文件，并建议 `AppExit Default Restart`（崩溃自动重启）+ `AppRestartDelay`。
+- 直接 `schtasks /run` 重启往往失败——若上次实例未被清理，调度器会提示"任务正在运行中"并拒绝新实例，**必须先 `/end` 再 `/run`**。
+- 运行期间不要再用 `start_backend.bat` 或手工 `uvicorn` 起第二个实例，会撞 `APP_PORT`。
+- `run_server.py` 的所有路径按脚本自身位置推导，不绑定盘符，部署到任何目录均可直接复用。
+- 历史 NSSM 服务（`SessionBackend`）已停用，`tools/nssm/` 仅保留说明文件。
+
+详细运维操作（启动 / 重启 / 停止 / 备份恢复 / 监控告警 / 安全基线）见 [docs/OPS-STARTUP.md](docs/OPS-STARTUP.md)、[docs/OPS-BACKUP.md](docs/OPS-BACKUP.md)、[docs/OPS-MONITORING.md](docs/OPS-MONITORING.md)、[docs/OPS-SECURITY.md](docs/OPS-SECURITY.md)。
 
 ## 启动前端
 
@@ -182,6 +182,7 @@ pnpm build
 
 ## 当前实现边界
 
-- 人工修复浏览器依赖 Windows 桌面会话，不支持纯无头后台修复。
+- 自动排障（SCOPE-019）唤起本机 Claude Code 连接 CDP 有头 Chrome 现场排障，依赖交互会话，不支持纯无头后台排障。
 - 代码当前没有登录鉴权与权限体系。
-- `legacy cookie` 外部表不是本仓库创建和维护的，它只在健康检查链路里被读取。
+- `legacy cookie` 外部表不是本仓库创建和维护的：健康检测读取；扩展采集 / 手动一键上报按既有列先查后改写回（不新增、不修改旧表列结构）。
+- 废弃模块（独立维护任务 / 旧健康检测 / 人工修复工单）已移出产品范围；对应后端残留路由见 `docs/DEV-PLAN.md` Phase 6 现状更新。

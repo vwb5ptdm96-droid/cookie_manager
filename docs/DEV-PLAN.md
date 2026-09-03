@@ -15,6 +15,9 @@
 - 环境自检、部署配置说明、运行日志检索
 - 全局快捷操作（执行环境自检、上传脚本）
 - Cookie 扩展采集：采集任务检测（失效→扩展补采→写回→复检）、扩展接入 API、映射管理
+- Cookie 一键上报：独立扩展以悬浮球抓取当前页 cookie 与请求头（chrome.debugger），手动填业务定位字段写回旧表
+- 生产服务化托管与运维加固：计划任务入口、健康探针、日志轮转、运维文档
+- 自动排障闭环：修复失败/异常/风控自动唤起 Claude Code 连 CDP 排障，回写 SOLVED/NEED_HUMAN
 
 ## 2. 当前技术栈
 
@@ -221,6 +224,8 @@
 
 ### Phase 6：旧模块清理与发布收口 🔄
 
+> **现状更新（2026-09-03 回写）**：本阶段主体已于 8/25 架构收敛时完成（导航收敛 7 项、旧模块删除、README/启动说明对齐）。但 2026-09-02 提交（`e929250`/`ec32798` 等）将同名旧模块代码（`session_tasks`/`health_checks`/`repairs`/`dashboard` 后端路由 + 前端孤儿 view）意外回潮——后端已注册进 `main.py` 并自带全套测试，但前端 router/导航无任何引用、也无业务模块依赖它们。判定为废弃残留（Spec OUT-007/008），**列为待清理项**：不回滚、不在此仓库删除（主工作区为内部机 `D:\session-maintenance-system`），由内部机统一清理。本阶段维持 🔄（收口未最终达成）。
+
 **目标**
 
 删除已废弃的旧架构模块，收敛导航，恢复可构建环境并发布。
@@ -366,7 +371,7 @@
 - 采集任务与映射可在页面增删改查，立即检测/触发采集与后端联通
 - 扩展接入信息页展示地址、密钥、安装步骤；前端 `npm run build` 通过
 
-### Phase 11：部署配置可移植化 🔄
+### Phase 11：部署配置可移植化 ✅
 
 **目标**
 
@@ -389,7 +394,7 @@
 - 部署机 `.env` 配置不同端口/路径后，点 `start_backend.bat` 可正常拉起后端与前端（`dist` 同端口托管）
 - 前端无硬编码后端端口，扩展接入地址按当前 origin 动态展示
 
-### Phase 12：目录库 CDP 调试功能 🔄
+### Phase 12：目录库 CDP 调试功能 ✅
 
 **目标**
 
@@ -451,7 +456,9 @@
 - 扩展在 Chrome 加载后：http/https 页面出现可拖动悬浮球，点击展开面板自动抓当前页面 cookie、填四字段提交写库；抓取为空时「刷新页面并重新获取」可用；「测试连接」经 background 调 `/api/ping` 正确展示联通结果
 - 后端测试与编译通过（不涉及前端构建）
 
-### Phase 14：Headers 捕获（chrome.debugger / CDP）⏳
+### Phase 14：Headers 捕获（chrome.debugger / CDP）✅
+
+> **现状更新（2026-09-03 回写）**：本阶段含 2026-08-27 两次迭代——基础捕获（REQ-010 / AC-008 / AC-009，`chrome.debugger` attach + `Network.enable` + 刷新 + 捕获首个同域名请求头）与「Headers 属性」过滤（AC-010 / AC-011，填属性名则精确捕获请求头含同名键的请求，留空维持原行为），随手动上报写回旧表 `headers` 列。
 
 **目标**
 
@@ -481,6 +488,70 @@
 - 上报带 headers → 旧表 `headers` 列写入 JSON 字符串；不抓 headers 时上报不受影响
 - 后端测试与编译通过
 
+### Phase 15：生产服务化托管与运维加固 ✅
+
+**目标**
+
+生产后端运行方式由 Windows 服务（NSSM）演进为「交互会话计划任务」单一入口，补齐健康探针、日志轮转、运维文档与修复链路健壮性，保证有头 Chrome / CDP 场景在登录会话可见。
+
+**交付物**
+
+- 统一启动入口 `run_server.py`：先执行 `alembic upgrade head`（失败返回非零退出码中止），再拉起 uvicorn；RotatingFileHandler 写 `runtime/logs/backend.log`（10MB×5 轮转），保留控制台输出
+- `start_interactive.bat`：被计划任务调用；优先 `backend\.venv\Scripts\python.exe`（含 alembic/pymysql），无则回退系统 python；stdout/stderr 落 `runtime/logs/boot.log` 供早启诊断
+- 计划任务 `SessionBackend-Interactive`（生产唯一入口，交互会话运行）：`schtasks /create` 注册、`/run` 启动、`/end` 停止
+- `restart_backend.bat`：`taskkill` 8081 监听进程 → `schtasks /end` 残留实例 → `/run` 重新拉起；直接 `/run` 会遇「任务正在运行中」拒绝，必须先 `/end`
+- 生产健康探针 `tools/watchdog.py`：端口 / SQLite / RDS 探活 + 飞书告警（计划任务 `SessionBackend-Watchdog`）
+- 运维文档 `docs/OPS-STARTUP.md` / `OPS-BACKUP.md` / `OPS-MONITORING.md` / `OPS-SECURITY.md`：启动入口、备份恢复、监控告警、安全基线
+- 修复链路健壮性：停滞 ScriptRun 回收 + 目录锁释放（`health_task_service` 重构）；子进程 stdout 强制 UTF-8 修中文日志乱码（`process_runner`）
+- 依赖钉版：`backend/requirements.txt` pin playwright / numpy / Pillow
+- README 与启动脚本同步：NSSM 停用（`tools/nssm/` 仅留说明），服务化说明对齐计划任务现状
+
+**关键文件**
+
+- `run_server.py`、`start_interactive.bat`、`restart_backend.bat`
+- `tools/watchdog.py`
+- `docs/OPS-STARTUP.md`、`docs/OPS-BACKUP.md`、`docs/OPS-MONITORING.md`、`docs/OPS-SECURITY.md`
+- `backend/app/services/health_task_service.py`、`backend/app/services/process_runner.py`
+- `backend/requirements.txt`、`README.md`
+
+**完成标准**
+
+- 生产后端经计划任务 `SessionBackend-Interactive` 拉起，`restart_backend.bat` 可完整重启（先 `/end` 后 `/run`，不报「任务正在运行中」）
+- 日志轮转落 `runtime/logs/backend.log`；`tools/watchdog.py` 探活异常触发飞书告警
+- 停滞 ScriptRun 可回收并释放目录锁；中文日志无乱码
+- 后端 `pytest` / `compileall` 通过
+
+### Phase 16：自动排障闭环（SCOPE-019 / 020）🔄
+
+**目标**
+
+修复脚本执行返回 `FAIL` / 抛异常 / 返回 `RISK`（风控）时，自动生成自动排障工单（独立于已废弃人工工单），按落库冷却 / 预算节流唤起本机 Claude Code 连接 CDP 现场排障，结论回写 `SOLVED` / `NEED_HUMAN`；`NEED_HUMAN` 关闭调试端口并飞书转人工。**后端已完成（SCOPE-019，仓库 main `36ed915`）**；前端列表页（SCOPE-020，P1 排后）待办。
+
+**交付物**
+
+- `AutoRepairTicket` 模型 + Alembic 迁移 0014；`AutoRepairShopState` 店铺维度排障冷却 / 节流状态 + 迁移 0015
+- `auto_repair_ticket_service`：独立会话建档、落库冷却 / 预算节流唤起、结论回写、`NEED_HUMAN` 关 debug 端口 + 飞书转人工
+- `agent_repair_dispatcher`：Claude Code CLI 可用性检测 / 超时 / 日志；`FAIL` / `RISK` / `EXCEPTION` 三类故障分流；`TICKET_RESULT` 行锚解析；`REPAIR_TICKET_ID` / 凭据脱敏；店铺维度节流（shop-state 0015）；进行中 agent 保活浏览器不回收
+- 人机验证安全护栏：滑块 / 拼图 / 短信 / 扫码 / 设备验证识别即 `NEED_HUMAN` 停止，严禁自动绕过（OUT-004 / 012 / 013）；账号级破坏性操作不无人值守执行
+- dispatcher 纯逻辑单测（result parse anchor、RISK prompt 分支、cmd 包装、masking）
+- 自动排障工单前端列表页 SCOPE-020（P1 排后，⏳）：查看 `PENDING→RUNNING→SOLVED/NEED_HUMAN` 流转、失败类型与排障结论，人工标记接手 / 关闭
+
+**关键文件**
+
+- `backend/app/models/auto_repair_ticket.py`、`backend/alembic/versions/0014_add_auto_repair_ticket.py`、`0015_add_auto_repair_shop_state.py`
+- `backend/app/services/auto_repair_ticket_service.py`、`backend/app/services/agent_repair_dispatcher.py`
+- `backend/app/api/routes/auto_repair_tickets.py`
+- `backend/app/tests/services/test_auto_repair_ticket_service.py`、`test_auto_repair_dispatcher.py`
+- `frontend/src/views/AutoRepairTicketsView.vue`（⏳ 待建）、`frontend/src/api/autoRepairTickets.ts`（⏳ 待建）
+
+**完成标准**
+
+- 脚本 `FAIL` / 异常 / `RISK` 自动建档；冷却期内不重复唤起（shop-state 节流生效）
+- dispatcher 成功唤起本机 Claude Code 连 CDP 排障，`TICKET_RESULT` 行锚解析正确回写工单
+- `NEED_HUMAN` 停止排障并关 debug 端口 + 飞书告警；排障过程凭据脱敏、不泄密
+- dispatcher 单测全绿；后端 `pytest` / `compileall` 通过
+- （⏳ 待办）SCOPE-020 前端列表页可查看工单流转、失败类型与结论，支持人工接手 / 关闭
+
 ## 6. 数据库表与归属阶段
 
 | 表 / 实体 | 归属阶段 | 说明 |
@@ -494,10 +565,12 @@
 | `cookie_sync_task` | Phase 7 / 9 | 采集任务：检测配置、调度、同步超时、状态 |
 | `cookie_sync_mapping` | Phase 7 / 8 | 采集映射：`(worker_id, domain) → channel/shop_name/mobile_phone/dns` |
 | `cookie_sync_job` | Phase 7 / 8 | 扩展采集任务队列：`task_id/worker_id/domains/status` |
-| `ods_cookie_playwright` | 外部依赖 | legacy cookie 数据来源；健康检测只读；扩展采集写回（Phase 7 起具备写回能力）；手动上报写回（Phase 13） |
+| `ods_cookie_playwright` | 外部依赖 | legacy cookie 数据来源；健康检测只读；扩展采集写回（Phase 7 起具备写回能力）；手动上报写回 cookie+headers（Phase 13 / 14） |
 | `session_maintenance_task` | 已废弃 | 旧维护任务表，保留数据不再读写 |
 | `health_check_config` | 已废弃 | 旧健康检测表，保留数据不再读写 |
 | `manual_repair_ticket` | 已废弃 | 旧人工修复工单表，保留数据不再读写 |
+| `auto_repair_ticket` | Phase 16 | 自动排障工单：独立于已废弃人工工单，`PENDING→RUNNING→SOLVED/NEED_HUMAN`；迁移 0014 |
+| `auto_repair_shop_state` | Phase 16 | 店铺维度排障冷却/节流状态；迁移 0015 |
 
 ## 7. 每阶段验证要求
 
@@ -510,20 +583,19 @@
 
 ## 8. 建议执行顺序
 
-如果按全新项目推进，严格按 Phase 1 到 Phase 10 执行。  
-如果基于当前仓库继续推进，Phase 1-5 已实现，旧模块清理（Phase 6 主体）已完成。后续：
+> 2026-09-03 回写：仓库现况（main `36ed915`）为 Phase 1-5、7-15 及 Phase 16 后端全部实现。本节给出全新推进顺序与剩余待办排期。
 
-1. **Phase 6 收口**：确认导航/快捷操作/README/启动说明/回归测试已收敛到 7 项导航的新架构（当前代码已基本达成，做最终回归）。
-2. **Phase 7-10（Cookie 扩展采集模块）**：
-   - Phase 7 采集数据模型与扩展写回能力
-   - Phase 8 扩展接入 API 接收端
-   - Phase 9 采集任务检测与扩展采集闭环
-   - Phase 10 采集模块前端页面
-3. **Phase 11-12（部署可移植化 + 目录库 CDP 调试）**：
-   - Phase 11 清理硬编码端口，部署链路全部 `.env` 驱动
-   - Phase 12 目录库调试端口 + 打开/关闭调试
-4. **Phase 13（手动 Cookie 上报扩展）**：`POST /api/cookies/manual` 端点 + 独立"Cookie 一键上报"扩展（复用 Phase 7 写回能力，不依赖前端）
-5. **Phase 14（Headers 捕获）**：`chrome.debugger`/CDP 捕获当前域名 API 完整请求头，随上报写入旧表 `headers` 列
-6. 全部通过后做完整联调与发布准备。
+如果按全新项目推进，严格按 Phase 1 到 Phase 16 顺序执行（Phase 16 前端列表页属 SCOPE-020 P1 排后项，可在后端稳定后补）。
 
-> 说明：扩展本体（Chrome 扩展）已在 `D:\公司小疑问\chrome扩展` 联调验证过，平台侧只需实现接收端 API，扩展代码不改（Phase 8 以现有 `background.js` 契约为准；Phase 10 将扩展包纳入仓库便于分发）。
+基于当前仓库继续推进，已完成与待办如下：
+
+- **已实现**：Phase 1-5（骨架 / 数据模型 / 脚本库与目录 / 健康检测闭环 / 脚本运行）、Phase 7-10（Cookie 采集数据模型 / 扩展 API / 采集闭环 / 前端页面）、Phase 11-14（部署可移植 / 目录库 CDP 调试 / 手动上报扩展 / Headers 捕获）、Phase 15（生产服务化托管与运维加固）、Phase 16 后端（SCOPE-019 自动排障闭环）
+- **Phase 6 遗留**：8/25 架构收敛主体已完成；2026-09-02 回潮的四模块（`session_tasks`/`health_checks`/`repairs`/`dashboard`）判废弃残留、待清理（见 Phase 6 现状更新），清理在内部机主工作区执行
+
+后续待办候选（按优先级）：
+
+1. **SCOPE-020 自动排障工单前端列表页**（P1 排后）：对应 Phase 16 前端，查看工单 `PENDING→RUNNING→SOLVED/NEED_HUMAN` 流转、失败类型与排障结论，支持人工接手与关闭
+2. **Phase 6 遗留清理**：移除回潮四模块后端路由、前端孤儿 view 及配套测试（内部机执行，避免与主工作区冲突）
+3. **完整回归**：后端 `pytest` + `compileall`、前端 `pnpm build`、主链路冒烟（`定时检测→失败→自动排障→回写` 与 Cookie 采集写回），对照 §7 每阶段验证要求
+
+> 说明：auto-repair 闭环（Phase 16）由内部机开发并合入 GitHub `main`（`36ed915`）；E 盘副本为备用工作区，同步以 `origin/main` 为准。扩展本体（Chrome 扩展）已在 `D:\公司小疑问\chrome扩展` 联调验证过，平台侧只维护接收端 API（Phase 8 契约、Phase 10 扩展包入仓、Phase 13/14「Cookie 一键上报」本体扩展）。
