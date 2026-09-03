@@ -38,6 +38,7 @@ from app.services.legacy_cookie_service import LegacyCookieLookup, LegacyCookieS
 from app.services.local_windows_executor import LocalWindowsExecutor
 from app.services.notification_service import send_feishu_notification
 from app.services.run_log_service import RunLogService
+from app.services.agent_repair_dispatcher import trigger_auto_repair
 
 
 ALLOWED_CHANNELS = {"KUAISHOU", "TAOBAO", "TMALL", "ALIMAMA", "JD", "PDD"}
@@ -390,6 +391,14 @@ class HealthTaskService:
         result["check_detail"] = detail_message
         return result
 
+    def _safe_kill_chrome(self, profile_path: Path, cdp_port: int, run_id: str) -> None:
+        """尽力清理 profile 目录与端口的 Chrome 进程；失败只告警不中断。"""
+        try:
+            kill_chrome_for_profile(profile_path)
+            kill_chrome_on_port(cdp_port)
+        except Exception:
+            logger.exception("清理 Chrome 异常 run_id=%s", run_id)
+
     def execute_repair(self, health_task_code: str) -> dict[str, object]:
         with _repair_lock:
             return self._do_execute_repair(health_task_code, force=False)
@@ -560,7 +569,6 @@ class HealthTaskService:
             logger.exception("清理旧 Chrome 进程异常 run_id=%s", run_id)
 
         timeout_seconds = row.repair_timeout_seconds or 600
-        execution_failed = False
         try:
             result = self.executor.execute(
                 script_path=script_path,
@@ -571,19 +579,15 @@ class HealthTaskService:
                 timeout_seconds=timeout_seconds,
                 on_start=lambda pid: self._mark_running(run_id, pid),
             )
-            if result.get("status") not in ("SUCCESS", "RISK"):
-                execution_failed = True
         except Exception as exc:
-            execution_failed = True
-            self._handle_execution_error(run_id, row, profile, exc, script_path=str(script_path), cdp_port=cdp_port)
+            # 执行异常：标记失败 + 释放锁（内部独立事务），并触发 EXCEPTION 自动排障
+            dispatch_result = self._handle_execution_error(
+                run_id, row, profile, exc, script_path=str(script_path), cdp_port=cdp_port
+            )
+            if not (dispatch_result or {}).get("dispatched"):
+                # 未唤起排障（冷却/预算/缺 CLI）：兜底清理现场浏览器，防残留
+                self._safe_kill_chrome(profile_absolute_path, cdp_port, run_id)
             raise AppError(f"执行脚本失败: {exc}", "EXECUTION_FAILED")
-        finally:
-            if not execution_failed:
-                try:
-                    kill_chrome_for_profile(profile_absolute_path)
-                    kill_chrome_on_port(cdp_port)
-                except Exception:
-                    logger.exception("清理 Chrome 异常 run_id=%s", run_id)
 
         end_time = beijing_now()
         duration_ms = int((end_time - start_time).total_seconds() * 1000)
@@ -591,6 +595,10 @@ class HealthTaskService:
         status = result.get("status", "FAIL")
         exit_code = result.get("exit_code", -1)
         log_path = result.get("log_path")
+
+        # 仅 SUCCESS 直接清理浏览器；FAIL/RISK 保留现场给自动排障（唤起/兜底时统一清理）
+        if status == "SUCCESS":
+            self._safe_kill_chrome(profile_absolute_path, cdp_port, run_id)
 
         with Session(self.engine) as session:
             sr = session.execute(
@@ -648,22 +656,33 @@ class HealthTaskService:
                     logger.exception("发送风控飞书通知异常 [%s]", health_task_code)
             else:
                 row_ref.status = "FAIL"
-                try:
-                    from app.services.repair_service_extension import RepairServiceAutoExtension
-                    RepairServiceAutoExtension.handle_script_failure(
-                        db=session,
-                        script_run_id=sr.id,
-                        script_path=str(script_path),
-                        channel=row.channel,
-                        shop_name=row.shop_name or "",
-                        cdp_port=cdp_port,
-                        error_message=result.get("error_message") or result.get("message") or "修复脚本执行失败 (FAIL)",
-                    )
-                except Exception as e:
-                    logger.error(f"[AutoRepair] 触发自动维修失败: {e}", exc_info=True)
 
             session.commit()
             session.refresh(row_ref)
+
+            # ── 自动排障触发（主事务已提交；内部独立 Session，见 REQ-011 / SCOPE-019）──
+            # FAIL / RISK 都唤起：RISK 由排障 agent 判级，遇人机验证即转人工（OUT-012）
+            if status in ("FAIL", "RISK"):
+                dispatch_result = trigger_auto_repair(
+                    self.engine,
+                    channel=row.channel,
+                    shop_name=row.shop_name,
+                    cdp_port=cdp_port,
+                    script_code=script["script_code"],
+                    script_path=str(script_path),
+                    health_task_code=health_task_code,
+                    health_task_name=row_ref.health_task_name,
+                    script_run_id=sr.id,
+                    issue_type=status,  # FAIL / RISK
+                    error_message=(
+                        result.get("error_message")
+                        or result.get("message")
+                        or f"修复脚本执行 {status}"
+                    ),
+                )
+                if not dispatch_result.get("dispatched"):
+                    # 未唤起（冷却/预算/缺 CLI）：兜底清理现场浏览器，防残留
+                    self._safe_kill_chrome(profile_absolute_path, cdp_port, run_id)
 
             self.log_service.write(
                 run_id=run_id,
@@ -831,6 +850,12 @@ class HealthTaskService:
         return resolve_runtime_path(self.runtime_root, relative_path)
 
     def _mark_running(self, run_id: str, pid: int) -> None:
+        """子进程一启动即回调落 RUNNING + pid + start_time（executor 在 Popen 后回调）。
+
+        此前 commit PENDING → Popen 之间存在窗口：父进程若在此窗口退出，run 无 pid、
+        无法与在跑实例区分、reap 无从核对。本回调把窗口缩到最小，保证此后
+        reap 能按 pid/start_time 核对与回收，不再留下不可辨的 PENDING 僵尸。
+        """
         try:
             with Session(self.engine) as session:
                 sr = session.execute(
@@ -846,6 +871,12 @@ class HealthTaskService:
 
     @staticmethod
     def _run_base_time(run: ScriptRun, now: datetime) -> datetime:
+        """回收判定的基准时间。
+
+        start_time 由 beijing_now 写入（本地时间 naive）；created_at 为 DB func.now()
+        （SQLite 存 UTC naive）。start_time 缺失（父进程死在写 start 前）的记录把
+        created_at 折算 +8h 到本地，避免时区差导致被误判为立即超时而误回收。
+        """
         if run.start_time is not None:
             return run.start_time
         if run.created_at is not None:
@@ -857,6 +888,10 @@ class HealthTaskService:
         return now >= (self._run_base_time(run, now) + timedelta(seconds=timeout + STALE_RUN_GRACE_SECONDS))
 
     def _reclaim_one(self, session: Session, run: ScriptRun, now: datetime) -> bool:
+        """单条回收（同事务内）：仅当确实僵死才执行，返回是否回收。
+
+        仅当锁仍指向本 run 才释放，避免误清被后续实例更新的锁。
+        """
         if not self._is_run_stale(run, now):
             return False
         if run.pid:
@@ -876,6 +911,10 @@ class HealthTaskService:
         return True
 
     def reap_stale_runs(self) -> int:
+        """回收所有超时未收尾的 ScriptRun，并同步释放对应目录锁（幂等）。
+
+        由调度每 tick 调用；也可在执行前惰性调用。返回回收条数。
+        """
         now = beijing_now()
         reclaimed = 0
         with Session(self.engine) as session:
@@ -922,22 +961,38 @@ class HealthTaskService:
             task_ref.last_run_status = "FAIL"
             task_ref.last_result_message = str(exc)
 
-            if sr and script_path:
-                try:
-                    from app.services.repair_service_extension import RepairServiceAutoExtension
-                    RepairServiceAutoExtension.handle_script_failure(
-                        db=session,
-                        script_run_id=sr.id,
-                        script_path=script_path,
-                        channel=task.channel,
-                        shop_name=task.shop_name or "",
-                        cdp_port=cdp_port,
-                        error_message=f"执行异常崩溃: {exc}",
-                    )
-                except Exception as e:
-                    logger.error(f"[AutoRepair] 异常处理中触发自动维修失败: {e}", exc_info=True)
-
+            # 缓存触发所需标量（with 退出后对象过期，无法再访问属性）
+            exc_ctx = {
+                "channel": task.channel,
+                "shop_name": task.shop_name or "",
+                "health_task_code": task.health_task_code,
+                "health_task_name": task.health_task_name,
+                "script_run_id": sr.id if sr else None,
+            }
             session.commit()
+
+        # 主事务已提交：触发 EXCEPTION 自动排障（独立 Session，见 REQ-011）；
+        # 返回 dispatch_result 供调用方决定是否兜底清理现场浏览器
+        dispatch_result: dict[str, object] = {"dispatched": False}
+        if sr is not None and exc_ctx["channel"]:
+            try:
+                from app.services.agent_repair_dispatcher import trigger_auto_repair
+
+                dispatch_result = trigger_auto_repair(
+                    self.engine,
+                    channel=exc_ctx["channel"],
+                    shop_name=exc_ctx["shop_name"],
+                    cdp_port=cdp_port,
+                    script_path=script_path or None,
+                    health_task_code=exc_ctx["health_task_code"],
+                    health_task_name=exc_ctx["health_task_name"],
+                    script_run_id=exc_ctx["script_run_id"],
+                    issue_type="EXCEPTION",
+                    error_message=f"执行异常崩溃: {exc}",
+                )
+            except Exception:
+                logger.exception("[AutoRepair] 异常处理中触发自动排障失败")
+        return dispatch_result
 
     def _validate_payload(
         self, payload: dict[str, object], is_create: bool
@@ -1075,6 +1130,6 @@ class HealthTaskService:
             "last_run_status": row.last_run_status,
             "last_result_message": row.last_result_message,
             "last_repaired_at": row.last_repaired_at,
-            "last_repair_run_id": row.last_repaired_at,
+            "last_repair_run_id": row.last_repair_run_id,
             "updated_at": row.updated_at,
         }

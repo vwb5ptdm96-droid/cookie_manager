@@ -22,6 +22,7 @@ from app.api.routes.dashboard import router as dashboard_router
 from app.api.routes.health_checks import router as health_checks_router
 from app.api.routes.repairs import router as repairs_router
 from app.api.routes.session_tasks import router as session_tasks_router
+from app.api.routes.auto_repair_tickets import router as auto_repair_tickets_router
 from app.api.deps import get_engine
 from app.core.config import ensure_runtime_dirs, get_settings
 from app.core.errors import AppError
@@ -70,6 +71,7 @@ app.include_router(dashboard_router, prefix="/api")
 app.include_router(health_checks_router, prefix="/api")
 app.include_router(repairs_router, prefix="/api")
 app.include_router(session_tasks_router, prefix="/api")
+app.include_router(auto_repair_tickets_router, prefix="/api")
 
 
 @app.exception_handler(AppError)

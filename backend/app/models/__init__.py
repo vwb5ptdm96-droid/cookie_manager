@@ -1,3 +1,4 @@
+from app.models.auto_repair_ticket import AutoRepairTicket
 from app.models.cookie_sync_job import CookieSyncJob
 from app.models.cookie_sync_mapping import CookieSyncMapping
 from app.models.cookie_sync_task import CookieSyncTask
@@ -11,6 +12,7 @@ from app.models.script_run import ScriptRun
 
 def load_models() -> None:
     _ = (
+        AutoRepairTicket,
         CookieSyncJob,
         CookieSyncMapping,
         CookieSyncTask,
