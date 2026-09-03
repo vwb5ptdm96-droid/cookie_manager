@@ -1,5 +1,12 @@
 # Product Spec Changelog
 
+## 2026-09-03 · 自动排障闭环生产生效（内部机部署里程碑）
+
+- 部署：SCOPE-019 闭环后端（main `36ed915`）合入内部机 `D:\session-maintenance-system`，`alembic upgrade head` 至 0015，`auto_repair_ticket` / `auto_repair_shop_state` 表结构就绪（数据 0 条为待点火常态，等首个真实 `FAIL` 触发建档）。
+- 生效：`SessionBackend-Interactive` 于 09-03 18:34 重启（进程 PID 44192）后代码才进内存——此前 9/2 13:51 启动的旧进程未加载闭环；重启后 openapi 新增 `/api/auto-repair-tickets`、`/api/auto-repair-tickets/{ticket_id}`，HealthTaskScheduler 每分钟扫描在转、启动无报错。
+- 运维要点：后端升级必须经计划任务重启才生效（uvicorn 子进程不热加载）；核对「是否在跑新代码」以 `openapi.json` 路由清单 + 进程 CreationDate 为准，勿只信磁盘代码版本。
+- 影响：纯运行生效里程碑，不改 API / Spec；SCOPE-020 前端列表页（P1 排后）不变，仍待办。
+
 ## 2026-09-03 · 自动排障闭环（Claude Code 排障）
 
 - 新增：SCOPE-019 自动排障闭环（后端）——修复脚本返回 `FAIL`/抛异常/返回 `RISK`(风控) 时自动生成自动排障工单（独立于已废弃人工工单），按落库冷却/预算节流唤起本机 Claude Code 连接 CDP 现场排障，结果回写 SOLVED/NEED_HUMAN，NEED_HUMAN 关端口 + 飞书转人工；SCOPE-020 自动排障工单前端列表页（P1 排后）。
