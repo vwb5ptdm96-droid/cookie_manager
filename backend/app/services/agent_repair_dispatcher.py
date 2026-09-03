@@ -27,9 +27,11 @@ from app.services.notification_service import send_feishu_notification
 
 logger = logging.getLogger(__name__)
 
-# 机器可读结果行的解析模式：claude 回复末尾须输出 TICKET_RESULT: <状态>
+# 机器可读结果行：锚定行首 + 只认 TICKET_RESULT 前缀（避免正文/tool 输出的
+# 裸 "result:" 字样误命中；prompt 会回显示例行，必须行首锚定防把示例当结论）
 _RESULT_PATTERN = re.compile(
-    r"(?:TICKET_RESULT|RESULT)\s*[:：]\s*(SOLVED|NEED_HUMAN|FAILED)", re.IGNORECASE
+    r"^[ \t]*TICKET_RESULT[ \t]*[:：][ \t]*(SOLVED|NEED_HUMAN|FAILED)",
+    re.IGNORECASE | re.MULTILINE,
 )
 _RESULT_STATUSES = ("SOLVED", "NEED_HUMAN", "FAILED")
 _CONCLUSION_MAX_CHARS = 4000
@@ -99,9 +101,13 @@ class AgentRepairDispatcher:
             logger.exception("[AutoRepair] 唤起 claude 失败 ticket=%s", ticket_code)
             return self._fail_now(ticket, run_ctx, f"唤起 claude 失败: {exc}")
 
-        # 进程已起：先落 RUNNING + 冷却/预算计数，再后台收尾
+        # 进程已起：先落 RUNNING + 店铺维度冷却/预算记账，再后台收尾
         try:
-            self.ticket_service.mark_dispatched(ticket_id)
+            self.ticket_service.mark_dispatched(
+                channel=ticket.get("channel") or "",
+                shop_name=ticket.get("shop_name"),
+                ticket_id=ticket_id,
+            )
         except Exception:
             logger.exception("[AutoRepair] 标记 RUNNING 失败 ticket=%s", ticket_code)
 
@@ -278,7 +284,9 @@ class AgentRepairDispatcher:
     def _build_prompt(self, ticket: dict[str, Any], run_ctx: dict[str, Any]) -> str:
         script_path = run_ctx.get("script_path") or ticket.get("script_code") or "(未知脚本)"
         port = ticket.get("cdp_port") or 9222
-        return (
+        is_risk = (ticket.get("issue_type") or "").upper() == "RISK"
+        err = _mask_line((ticket.get("error_message") or "")[:500])
+        head = (
             f"你是本系统的自动排障维修员（Auto-Repair Worker），有一张自动排障工单需要现场处理。\n"
             f"工单号: {ticket.get('ticket_code')}\n"
             f"渠道: {ticket.get('channel') or '-'}\n"
@@ -286,27 +294,51 @@ class AgentRepairDispatcher:
             f"目标脚本: {script_path}\n"
             f"CDP 调试端口: {port}\n"
             f"失败类型: {ticket.get('issue_type') or 'FAIL'}\n"
-            f"错误摘要: {(ticket.get('error_message') or '')[:500]}\n"
-            f"\n严格按以下 SOP 处理，全程真实探查、严禁凭空猜测：\n"
-            f"1. 探查现场：运行 python .claude/tools/cdp_inspector.py --port {port} "
-            f"--action inspect --screenshot logs/auto_repair_{ticket.get('ticket_code')}.png\n"
-            f"2. 分析阻碍：根据当前 URL 与可见弹窗/遮罩，判断是运营推广浮层、协议/组织更新，"
-            f"还是人机验证（滑块/拼图/短信/扫码/疑似封禁）。\n"
-            f"3. 安全红线（最高优先，违反即失败）：\n"
-            f"   - 确认是人机验证或疑似封禁：立即停止，严禁尝试绕过或反复点击，直接判 NEED_HUMAN。\n"
-            f"   - 严禁修改 backend/app/core/ 底座、数据库结构，严禁删除 user_data_dir，严禁终止正常后台服务。\n"
-            f"4. 常规遮罩/弹窗：用 cdp_inspector 的 click 动作单步关闭对应按钮后，"
-            f"重跑验证：python {script_path} --cdp-port {port} --skip-db\n"
-            f"5. 收尾（必须）：在回复末尾单独输出一行机器可读结果，格式严格为：\n"
-            f"   TICKET_RESULT: SOLVED       （问题已消除/脚本重跑通过）\n"
+            f"错误摘要: {err}\n"
+            f"\n严格按以下 SOP 处理，全程真实探查、严禁凭空猜测。\n"
+        )
+        if is_risk:
+            steps = (
+                f"1. 探查现场：运行 python .claude/tools/cdp_inspector.py --port {port} "
+                f"--action inspect --screenshot logs/auto_repair_{ticket.get('ticket_code')}.png\n"
+                f"2. RISK 风控工单——只诊断判级，不做任何修改与重试：判断当前是否确为人机验证"
+                f"（滑块/拼图/短信/扫码/设备验证）或疑似封禁/风控页。\n"
+                f"3. 结论（RISK 工单允许的唯一输出动作）：\n"
+                f"   - 确认人机验证/疑似封禁 → 输出 TICKET_RESULT: NEED_HUMAN 并说明风控类型；\n"
+                f"   - 页面无风控迹象（疑历史误报）→ 仍输出 TICKET_RESULT: NEED_HUMAN 并说明依据，保持保守。\n"
+                f"4. RISK 工单严禁：点击消除任何弹窗、重跑目标脚本、任何写操作与尝试自动过验。\n"
+            )
+        else:
+            steps = (
+                f"1. 探查现场：运行 python .claude/tools/cdp_inspector.py --port {port} "
+                f"--action inspect --screenshot logs/auto_repair_{ticket.get('ticket_code')}.png\n"
+                f"2. 分析阻碍：根据当前 URL 与可见弹窗/遮罩，判断是运营推广浮层、协议/组织更新，"
+                f"还是人机验证（滑块/拼图/短信/扫码/疑似封禁）。\n"
+                f"3. 安全红线（最高优先，违反即失败）：\n"
+                f"   - 确认人机验证或疑似封禁：立即停止，严禁尝试绕过或反复点击，直接判 NEED_HUMAN。\n"
+                f"   - 严禁修改 backend/app/core/ 底座、数据库结构，严禁删除 user_data_dir，严禁终止正常后台服务。\n"
+                f"4. 常规遮罩/弹窗：用 cdp_inspector 的 click 动作单步关闭对应按钮后，"
+                f"重跑验证：python {script_path} --cdp-port {port} --skip-db\n"
+            )
+        tail = (
+            f"5. 收尾（必须）：在回复末尾单独输出一行机器可读结果，行首必须是 TICKET_RESULT，"
+            f"格式严格为：\n"
+            f"   TICKET_RESULT: SOLVED       （问题已消除/脚本重跑通过，仅非 RISK 可输出）\n"
             f"   TICKET_RESULT: NEED_HUMAN    （人机验证/无法确认/需人工）\n"
             f"   并在结果行之前用 2-4 行简述：阻挡原因、处理动作、修复结果。\n"
             f"\n预算：单次排障最多 4 轮工具调用即须给出结论，不要扩大修改范围。"
         )
+        return head + steps + tail
 
     def _prepare_log_file(self, ticket_code: str) -> Path:
+        # 运行时日志目录（dispatcher 自身落盘）
         base = self.logs_root / "auto_repair"
         base.mkdir(parents=True, exist_ok=True)
+        # claude 在 project_root 下运行，其截图等相对路径写 project_root/logs/auto_repair
+        try:
+            (self.project_root / "logs" / "auto_repair").mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
         return base / f"{ticket_code}.log"
 
     @staticmethod
@@ -372,13 +404,22 @@ def trigger_auto_repair(
         logger.exception("[AutoRepair] 自动排障建单失败 channel=%s shop=%s", channel, shop_name)
         return {"dispatched": False, "reason": "建单失败", "ticket_id": None, "ticket_code": None}
 
-    verdict = ticket_service.evaluate_dispatch(int(ticket["id"]))
+    # 节流按 (channel, shop_name) 店铺维度判定（REQ-011），与工单生命周期无关
+    verdict = ticket_service.evaluate_dispatch(channel, shop_name)
     if not verdict["ok"]:
+        logger.info(
+            "[AutoRepair] 跳过唤起 channel=%s shop=%s ticket=%s reason=%s",
+            channel,
+            shop_name,
+            ticket["ticket_code"],
+            verdict["reason"],
+        )
         return {
             "dispatched": False,
             "reason": verdict["reason"],
             "ticket_id": ticket["id"],
             "ticket_code": ticket["ticket_code"],
+            "ticket_status": ticket["status"],
         }
 
     dispatcher = AgentRepairDispatcher(
@@ -391,4 +432,7 @@ def trigger_auto_repair(
         "health_task_name": health_task_name or health_task_code,
         "shop_name": shop_name,
     }
-    return dispatcher.dispatch(ticket, run_ctx)
+    result = dispatcher.dispatch(ticket, run_ctx)
+    # 通知调用方工单当前状态：唤起成功即 RUNNING（供"是否兜底清理现场浏览器"决策）
+    result["ticket_status"] = "RUNNING" if result.get("dispatched") else ticket.get("status")
+    return result

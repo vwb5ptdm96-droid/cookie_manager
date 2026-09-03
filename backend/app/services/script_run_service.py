@@ -9,7 +9,6 @@ from sqlalchemy import Engine, select
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError
-from app.core.path_utils import resolve_runtime_path
 from app.models.health_task import HealthTask
 from app.models.script_registry import ScriptRegistry
 from app.models.script_run import ScriptRun
@@ -166,76 +165,9 @@ class ScriptRunService:
                 return json.loads(row.result_json)
             return {"status": "UNKNOWN", "message": "无结果数据"}
 
-    # ── 自动排障挂载入口（Spec REQ-011 / SCOPE-019）──
-
-    def handle_run_failure(
-        self, run_id: str, error_message: str | None = None
-    ) -> None:
-        """外部 ScriptRun 失败时的通用自动排障入口。
-
-        业务定位（channel/shop_name）一律经 ScriptRun 关联的 HealthTask 获取
-        （禁止用 ScriptRegistry.platform/script_name 冒充渠道/店铺）；无健康任务
-        关联时无法正确定位，只记日志不建单，避免产生脏工单。
-        """
-        with Session(self.engine) as session:
-            row = session.execute(
-                select(ScriptRun).where(ScriptRun.run_id == run_id)
-            ).scalar_one_or_none()
-            if row is None:
-                logger.warning("[AutoRepair] 未找到 run_id=%s 的运行记录，跳过自动排障", run_id)
-                return
-
-            script_path = ""
-            cdp_port = 9222
-            ctx = {
-                "script_code": row.script_code,
-                "script_run_id": row.id,
-                "err_msg": error_message or row.error_message or "脚本执行异常退出 (FAIL)",
-                "health_task_code": row.health_task_code,
-            }
-            if row.script_code:
-                reg = session.execute(
-                    select(ScriptRegistry).where(ScriptRegistry.script_code == row.script_code)
-                ).scalar_one_or_none()
-                if reg:
-                    absolute_dir = resolve_runtime_path(self.runtime_root, reg.script_dir)
-                    script_path = str(absolute_dir / reg.main_file)
-                    cdp_port = reg.default_cdp_port or 9222
-
-            channel: str | None = None
-            shop_name: str | None = None
-            health_task_name: str | None = None
-            if row.health_task_code:
-                ht = session.execute(
-                    select(HealthTask).where(HealthTask.health_task_code == row.health_task_code)
-                ).scalar_one_or_none()
-                if ht is not None:
-                    channel = ht.channel
-                    shop_name = ht.shop_name
-                    health_task_name = ht.health_task_name
-
-        if not channel:
-            logger.warning(
-                "[AutoRepair] run_id=%s 无关联健康任务，无法定位渠道/店铺，跳过自动排障",
-                run_id,
-            )
-            return
-
-        from app.services.agent_repair_dispatcher import trigger_auto_repair
-
-        trigger_auto_repair(
-            self.engine,
-            channel=channel,
-            shop_name=shop_name,
-            cdp_port=cdp_port,
-            script_code=ctx["script_code"],
-            script_path=script_path or None,
-            health_task_code=ctx["health_task_code"],
-            health_task_name=health_task_name,
-            script_run_id=ctx["script_run_id"],
-            issue_type="FAIL",
-            error_message=ctx["err_msg"],
-        )
+    # 说明：自动排障触发统一挂在健康检测修复主链路收尾处（见 health_task_service
+    # _do_execute_repair / _handle_execution_error，Spec REQ-011 / SCOPE-019）。
+    # 其它脚本运行方若需接入失败排障，直接调 agent_repair_dispatcher.trigger_auto_repair。
 
     # ── 内部 ──
 

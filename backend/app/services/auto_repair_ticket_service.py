@@ -1,8 +1,12 @@
 """自动排障工单数据层（Spec REQ-011 / SCOPE-019）。
 
-职责边界：只负责自动排障工单的建单/复用、节流判定、状态回写，全部走
-独立 Session（绝不借用主修复事务 session，防止提前提交 / 回滚目录锁
-释放与任务状态标记）。唤起 Claude 的编排由 AgentRepairDispatcher 负责。
+职责边界：只负责自动排障工单的建单/复用、店铺维度节流判定、状态回写，全部走
+独立 Session（绝不借用主修复事务 session，防止提前提交 / 回滚目录锁释放与任务
+状态标记）。唤起 Claude 的编排由 AgentRepairDispatcher 负责。
+
+节流（冷却 + 当日预算）按 `(channel, shop_name)` 店铺维度落在
+AutoRepairShopState 上，与单张工单生命周期无关：上一张工单进入终态后，同店
+再失败仍被节流拦下，防止单店反复失败刷爆 token。
 """
 
 from __future__ import annotations
@@ -10,11 +14,13 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import Engine, select
-from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
+from app.models.auto_repair_shop_state import AutoRepairShopState
 from app.models.auto_repair_ticket import AutoRepairTicket
 
 logger = logging.getLogger(__name__)
@@ -35,6 +41,26 @@ def _today_str(now: datetime | None = None) -> str:
     return (now or beijing_now()).strftime("%Y%m%d")
 
 
+def _norm_shop(shop_name: str | None) -> str:
+    """店铺键归一：None / 空串视为同一店铺，统一存空串。"""
+    return (shop_name or "").strip()
+
+
+def _sanitize(text: str | None) -> str | None:
+    """统一脱敏入口（cookie/token/密码/手机号等），复用 health_task_service 实现。
+
+    延迟 import 避免模块级循环（health_task_service → dispatcher → 本模块）。
+    """
+    if not text:
+        return text
+    try:
+        from app.services.health_task_service import HealthTaskService
+
+        return HealthTaskService._mask_sensitive(text)
+    except Exception:
+        return text
+
+
 class AutoRepairTicketService:
     """自动排障工单的持久化操作。每个公开方法自开独立事务，互不污染。"""
 
@@ -47,7 +73,7 @@ class AutoRepairTicketService:
         self.engine = engine
         # 同 (channel, shop_name) 两次唤起之间的最小间隔（秒）
         self.cooldown_seconds = cooldown_seconds
-        # 同店每日可唤起上限（budget_day 维度，跨天重置）
+        # 同店每日可唤起上限（AutoRepairShopState.budget_day 维度，跨天重置）
         self.daily_budget = daily_budget
 
     # ── 建单 / 复用 ──
@@ -65,9 +91,11 @@ class AutoRepairTicketService:
         error_message: str | None = None,
     ) -> dict[str, Any]:
         """按 (channel, shop_name) 查未结工单：存在则复用并更新到最新上下文，
-        否则新建。返回序列化工单（含 `is_new` 标记）。"""
+        否则新建。error_message 入库前统一脱敏。返回序列化工单（含 is_new）。"""
         if issue_type not in {"FAIL", "EXCEPTION", "RISK"}:
             issue_type = "FAIL"
+        error_message = _sanitize(error_message)
+        shop_key = _norm_shop(shop_name)
         ctx = {
             "cdp_port": cdp_port,
             "script_code": script_code,
@@ -76,47 +104,71 @@ class AutoRepairTicketService:
             "issue_type": issue_type,
         }
         with Session(self.engine) as session:
-            existing = self._find_open(session, channel, shop_name)
+            existing = self._find_open(session, channel, shop_key)
             if existing is not None:
                 return self._reuse(session, existing, ctx, error_message)
-            return self._create(session, channel, shop_name, cdp_port, script_code, health_task_code, script_run_id, issue_type, error_message)
+            return self._create(session, channel, shop_key, cdp_port, script_code, health_task_code, script_run_id, issue_type, error_message)
 
-    # ── 节流判定 ──
+    # ── 店铺维度节流 ──
 
-    def evaluate_dispatch(self, ticket_id: int, now: datetime | None = None) -> dict[str, Any]:
-        """冷却/预算/状态检查，返回 {ok: bool, reason: str}。"""
+    def evaluate_dispatch(
+        self, channel: str, shop_name: str | None, now: datetime | None = None
+    ) -> dict[str, Any]:
+        """冷却/预算检查（shop 维度，跨工单），返回 {ok, reason}。"""
         now = now or beijing_now()
+        shop_key = _norm_shop(shop_name)
         with Session(self.engine) as session:
-            row = self._get(session, ticket_id)
-            if row is None:
-                return {"ok": False, "reason": f"工单不存在 id={ticket_id}"}
-            if row.status in TERMINAL_STATUSES:
-                return {"ok": False, "reason": f"工单已终态 ({row.status})"}
-            if row.last_dispatched_at is not None:
-                since = (now - row.last_dispatched_at).total_seconds()
+            state = self._get_shop_state(session, channel, shop_key)
+            if state is None:
+                return {"ok": True, "reason": "ok"}
+            if state.last_dispatched_at is not None:
+                since = (now - state.last_dispatched_at).total_seconds()
                 if since < self.cooldown_seconds:
                     remain = int(self.cooldown_seconds - since)
                     return {"ok": False, "reason": f"冷却期内 ({remain}s 后可再唤起)"}
-            if row.budget_day == _today_str(now) and row.dispatch_count >= self.daily_budget:
+            if state.budget_day == _today_str(now) and (state.dispatch_count or 0) >= self.daily_budget:
                 return {"ok": False, "reason": f"已达当日预算 ({self.daily_budget} 次/店)"}
             return {"ok": True, "reason": "ok"}
 
-    def mark_dispatched(self, ticket_id: int, now: datetime | None = None) -> None:
-        """置 RUNNING，推进当日预算计数与冷却锚点。"""
+    def mark_dispatched(
+        self,
+        *,
+        channel: str,
+        shop_name: str | None,
+        ticket_id: int | None = None,
+        now: datetime | None = None,
+    ) -> None:
+        """唤起成功后记账：店铺维度推进冷却/预算 + 将关联工单置 RUNNING。
+
+        必须在 Popen 成功之后调用，保证计次反映真实唤起。
+        """
         now = now or beijing_now()
+        today = _today_str(now)
+        shop_key = _norm_shop(shop_name)
         with Session(self.engine) as session:
-            row = self._get(session, ticket_id)
-            if row is None:
-                return
-            today = _today_str(now)
-            if row.budget_day != today:
-                row.dispatch_count = 1
-                row.budget_day = today
+            state = self._get_shop_state(session, channel, shop_key)
+            if state is None:
+                state = AutoRepairShopState(channel=channel, shop_name=shop_key)
+                session.add(state)
+            if state.budget_day != today:
+                state.dispatch_count = 1
+                state.budget_day = today
             else:
-                row.dispatch_count = (row.dispatch_count or 0) + 1
-            row.last_dispatched_at = now
-            row.status = "RUNNING"
-            session.commit()
+                state.dispatch_count = (state.dispatch_count or 0) + 1
+            state.last_dispatched_at = now
+
+            if ticket_id is not None:
+                ticket = session.get(AutoRepairTicket, ticket_id)
+                if ticket is not None:
+                    ticket.status = "RUNNING"
+                    ticket.last_dispatched_at = now
+                    ticket.budget_day = today
+                    ticket.dispatch_count = state.dispatch_count  # 展示一致性（节流以 shop 维度为准）
+            try:
+                session.commit()
+            except SQLAlchemyError:
+                session.rollback()
+                raise
 
     # ── 状态回写 ──
 
@@ -128,14 +180,15 @@ class AutoRepairTicketService:
         diagnosis: str | None = None,
         error_message: str | None = None,
     ) -> None:
-        """回写终态：SOLVED（排障完成关闭）/ NEED_HUMAN（转人工）/
-        FAILED（唤起或执行异常，走告警）。"""
+        """回写终态：SOLVED / NEED_HUMAN / FAILED，落库前统一脱敏。"""
         if status not in TERMINAL_STATUSES:
             logger.warning("[AutoRepair] 非法终态 %s，忽略", status)
             return
+        diagnosis = _sanitize(diagnosis)
+        error_message = _sanitize(error_message)
         now = beijing_now()
         with Session(self.engine) as session:
-            row = self._get(session, ticket_id)
+            row = session.get(AutoRepairTicket, ticket_id)
             if row is None:
                 return
             row.status = status
@@ -165,18 +218,18 @@ class AutoRepairTicketService:
 
     def get_ticket(self, ticket_id: int) -> dict[str, Any] | None:
         with Session(self.engine) as session:
-            row = self._get(session, ticket_id)
+            row = session.get(AutoRepairTicket, ticket_id)
             return self._serialize(row) if row is not None else None
 
     # ── 内部 ──
 
     @staticmethod
-    def _find_open(session: Session, channel: str, shop_name: str | None) -> AutoRepairTicket | None:
+    def _find_open(session: Session, channel: str, shop_key: str) -> AutoRepairTicket | None:
         return session.execute(
             select(AutoRepairTicket)
             .where(
                 AutoRepairTicket.channel == channel,
-                AutoRepairTicket.shop_name == shop_name,
+                AutoRepairTicket.shop_name == shop_key,
                 AutoRepairTicket.status.in_(OPEN_STATUSES),
             )
             .order_by(AutoRepairTicket.id.desc())
@@ -184,8 +237,15 @@ class AutoRepairTicketService:
         ).scalar_one_or_none()
 
     @staticmethod
-    def _get(session: Session, ticket_id: int) -> AutoRepairTicket | None:
-        return session.get(AutoRepairTicket, ticket_id)
+    def _get_shop_state(
+        session: Session, channel: str, shop_key: str
+    ) -> AutoRepairShopState | None:
+        return session.execute(
+            select(AutoRepairShopState).where(
+                AutoRepairShopState.channel == channel,
+                AutoRepairShopState.shop_name == shop_key,
+            )
+        ).scalar_one_or_none()
 
     def _reuse(
         self,
@@ -214,7 +274,7 @@ class AutoRepairTicketService:
         self,
         session: Session,
         channel: str,
-        shop_name: str | None,
+        shop_key: str,
         cdp_port: int,
         script_code: str | None,
         health_task_code: str | None,
@@ -222,12 +282,10 @@ class AutoRepairTicketService:
         issue_type: str,
         error_message: str | None,
     ) -> dict[str, Any]:
-        from uuid import uuid4
-
         row = AutoRepairTicket(
             ticket_code=f"art_{uuid4().hex[:10]}",
             channel=channel,
-            shop_name=shop_name,
+            shop_name=shop_key,
             cdp_port=cdp_port or 9222,
             script_code=script_code,
             health_task_code=health_task_code,

@@ -585,8 +585,9 @@ class HealthTaskService:
                 run_id, row, profile, exc, script_path=str(script_path), cdp_port=cdp_port
             )
             if not (dispatch_result or {}).get("dispatched"):
-                # 未唤起排障（冷却/预算/缺 CLI）：兜底清理现场浏览器，防残留
-                self._safe_kill_chrome(profile_absolute_path, cdp_port, run_id)
+                # 未唤起排障：若该店有在途排障（RUNNING）则保留浏览器给在途 agent，否则兜底清理
+                if (dispatch_result or {}).get("ticket_status") != "RUNNING":
+                    self._safe_kill_chrome(profile_absolute_path, cdp_port, run_id)
             raise AppError(f"执行脚本失败: {exc}", "EXECUTION_FAILED")
 
         end_time = beijing_now()
@@ -681,8 +682,9 @@ class HealthTaskService:
                     ),
                 )
                 if not dispatch_result.get("dispatched"):
-                    # 未唤起（冷却/预算/缺 CLI）：兜底清理现场浏览器，防残留
-                    self._safe_kill_chrome(profile_absolute_path, cdp_port, run_id)
+                    # 未唤起：若该店有在途排障（RUNNING）则保留浏览器给在途 agent，否则兜底清理
+                    if dispatch_result.get("ticket_status") != "RUNNING":
+                        self._safe_kill_chrome(profile_absolute_path, cdp_port, run_id)
 
             self.log_service.write(
                 run_id=run_id,
