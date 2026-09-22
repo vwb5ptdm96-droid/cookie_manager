@@ -5,6 +5,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 
 import {
   fetchAgentStatus,
+  fetchAgentChat,
   fetchAutoRepairTicket,
   fetchAutoRepairTickets,
   fetchOpsSummary,
@@ -104,8 +105,10 @@ async function loadList(): Promise<void> {
     if (current.value && !data.items.some((row) => row.id === current.value?.id)) {
       current.value = null;
       events.value = [];
-      chat.value = [];
       diffText.value = "";
+    }
+    if (!current.value && !sending.value) {
+      await loadWatcherChat();
     }
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : "加载 Agent 工单失败");
@@ -124,8 +127,20 @@ async function openTicket(row: AutoRepairTicketItem): Promise<void> {
 function clearTicket(): void {
   current.value = null;
   events.value = [];
-  chat.value = [];
   diffText.value = "";
+  void loadWatcherChat();
+}
+
+async function loadWatcherChat(): Promise<void> {
+  if (current.value || sending.value) return;
+  try {
+    const data = await fetchAgentChat();
+    if (!current.value && !sending.value) {
+      chat.value = data.items;
+    }
+  } catch {
+    /* 无单历史读失败不挡发送 */
+  }
 }
 
 async function refreshDetail(): Promise<void> {
@@ -461,7 +476,7 @@ onUnmounted(stopPoll);
           <el-tag v-else size="small" type="info">Watcher</el-tag>
         </div>
 
-        <div ref="logEl" class="log" v-loading="loading && !current">
+        <div ref="logEl" class="log" v-loading="loading && !current && !chat.length">
           <template v-if="current">
             <article v-if="current.error_message" class="bubble system">
               <span class="who">触发</span>
@@ -471,13 +486,13 @@ onUnmounted(stopPoll);
               <span class="who">{{ eventLabel(ev.type) }}</span>
               <pre>{{ ev.text }}</pre>
             </article>
-            <article v-for="(msg, idx) in chat" :key="'c' + idx" class="bubble" :class="msg.role">
-              <span class="who">{{ msg.role === "user" ? "你" : "Agent" }}</span>
-              <pre>{{ msg.text }}</pre>
-            </article>
-            <p v-if="!events.length && !chat.length" class="hint">这张工单还没有过程记录。可在下方追问（不改脚本）。</p>
           </template>
-          <p v-else class="hint empty">可以直接问今日运行情况，或从左侧打开一张工单看排障过程。</p>
+          <article v-for="(msg, idx) in chat" :key="'c' + idx" class="bubble" :class="msg.role">
+            <span class="who">{{ msg.role === "user" ? "你" : "Agent" }}</span>
+            <pre>{{ msg.text }}</pre>
+          </article>
+          <p v-if="current && !events.length && !chat.length" class="hint">这张工单还没有过程记录。可在下方追问（不改脚本）。</p>
+          <p v-else-if="!current && !chat.length" class="hint empty">没有选中工单也可以问。例如：今天跑得怎么样？</p>
         </div>
 
         <form class="composer" @submit.prevent="send">
