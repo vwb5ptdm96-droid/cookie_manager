@@ -31,8 +31,11 @@ class AutoRepairTicket(Base):
     script_run_id: int | None = Column(Integer, nullable=True)
 
     # ── 工单流转 ──
-    # issue_type: FAIL / EXCEPTION / RISK
-    issue_type: str = Column(String(16), nullable=False, default="FAIL")
+    # issue_type: FAIL / EXCEPTION / RISK；采集单：NO_MAPPING / JOB_TIMEOUT / RECHECK_FAIL / DISPATCH_FAILED
+    issue_type: str = Column(String(32), nullable=False, default="FAIL")
+    # kind: auto_repair | cookie_sync
+    kind: str = Column(String(32), nullable=False, default="auto_repair")
+    cookie_sync_task_code: str | None = Column(String(64), nullable=True)
     # status: PENDING / RUNNING / SOLVED / NEED_HUMAN / FAILED
     status: str = Column(String(16), nullable=False, default="PENDING")
     error_message: str | None = Column(Text, nullable=True)

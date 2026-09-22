@@ -222,7 +222,7 @@ class HealthTaskService:
 
     # ── 执行 ──
 
-    def execute_check(self, health_task_code: str) -> dict[str, object]:
+    def execute_check(self, health_task_code: str, *, follow_up: bool = True) -> dict[str, object]:
         run_id = f"check_{uuid4().hex[:12]}"
         steps: list[str] = []
 
@@ -354,7 +354,7 @@ class HealthTaskService:
             session.commit()
             session.refresh(row)
 
-        if row.status == "FAIL":
+        if row.status == "FAIL" and follow_up:
             try:
                 send_feishu_notification(
                     title=f"健康检测失败: {row.health_task_name or health_task_code}",
@@ -398,6 +398,22 @@ class HealthTaskService:
             kill_chrome_on_port(cdp_port)
         except Exception:
             logger.exception("清理 Chrome 异常 run_id=%s", run_id)
+
+    def _unlock_profile_if_run(self, directory_id: int, run_id: str) -> None:
+        """未唤起 Agent 时释放仍挂在该 ScriptRun 上的目录锁。"""
+        try:
+            with Session(self.engine) as session:
+                profile_row = session.execute(
+                    select(ProfileRegistry).where(ProfileRegistry.id == directory_id)
+                ).scalar_one_or_none()
+                if profile_row is not None and profile_row.lock_run_id == run_id:
+                    profile_row.is_locked = False
+                    profile_row.lock_owner = None
+                    profile_row.lock_run_id = None
+                    profile_row.locked_at = None
+                    session.commit()
+        except Exception:
+            logger.exception("释放目录锁失败 run_id=%s", run_id)
 
     def execute_repair(self, health_task_code: str) -> dict[str, object]:
         with _repair_lock:
@@ -528,6 +544,7 @@ class HealthTaskService:
                 status="PENDING",
                 artifact_dir=str(artifact_dir),
                 control_file=control_file,
+                created_at=beijing_now(),
             )
             session.add(sr)
 
@@ -623,11 +640,13 @@ class HealthTaskService:
             profile_row = session.execute(
                 select(ProfileRegistry).where(ProfileRegistry.id == effective_directory_id)
             ).scalar_one_or_none()
+            keep_lock_for_agent = status in ("FAIL", "RISK")
             if profile_row is not None and profile_row.lock_run_id == run_id:
-                profile_row.is_locked = False
-                profile_row.lock_owner = None
-                profile_row.lock_run_id = None
-                profile_row.locked_at = None
+                if not keep_lock_for_agent:
+                    profile_row.is_locked = False
+                    profile_row.lock_owner = None
+                    profile_row.lock_run_id = None
+                    profile_row.locked_at = None
 
             row_ref = self._get_row(session, health_task_code)
             row_ref.last_run_status = status
@@ -680,11 +699,15 @@ class HealthTaskService:
                         or result.get("message")
                         or f"修复脚本执行 {status}"
                     ),
+                    profile_key=str(profile.get("profile_key") or "") or None,
+                    profile_path=str(profile_absolute_path),
+                    steal_run_id=run_id,
                 )
                 if not dispatch_result.get("dispatched"):
                     # 未唤起：若该店有在途排障（RUNNING）则保留浏览器给在途 agent，否则兜底清理
                     if dispatch_result.get("ticket_status") != "RUNNING":
                         self._safe_kill_chrome(profile_absolute_path, cdp_port, run_id)
+                    self._unlock_profile_if_run(int(effective_directory_id), run_id)
 
             self.log_service.write(
                 run_id=run_id,
@@ -875,15 +898,15 @@ class HealthTaskService:
     def _run_base_time(run: ScriptRun, now: datetime) -> datetime:
         """回收判定的基准时间。
 
-        start_time 由 beijing_now 写入（本地时间 naive）；created_at 为 DB func.now()
-        （SQLite 存 UTC naive）。start_time 缺失（父进程死在写 start 前）的记录把
-        created_at 折算 +8h 到本地，避免时区差导致被误判为立即超时而误回收。
+        start_time 由 beijing_now 写入（本地 naive）。created_at 新写入也是北京时间；
+        旧 SQLite UTC naive 会落后约 8h，用 db_naive_as_beijing 折算，避免误回收。
         """
         if run.start_time is not None:
             return run.start_time
-        if run.created_at is not None:
-            return run.created_at + timedelta(hours=8)
-        return now
+        from app.core.time_utils import db_naive_as_beijing
+
+        converted = db_naive_as_beijing(run.created_at, now=now)
+        return converted or now
 
     def _is_run_stale(self, run: ScriptRun, now: datetime) -> bool:
         timeout = run.timeout_seconds or 600
@@ -953,11 +976,7 @@ class HealthTaskService:
             profile_row = session.execute(
                 select(ProfileRegistry).where(ProfileRegistry.id == profile["id"])
             ).scalar_one_or_none()
-            if profile_row:
-                profile_row.is_locked = False
-                profile_row.lock_owner = None
-                profile_row.lock_run_id = None
-                profile_row.locked_at = None
+            # FAIL/EXCEPTION 现场留给自动排障接管锁；未唤起时由调用方/下方解锁
 
             task_ref = self._get_row(session, task.health_task_code)
             task_ref.last_run_status = "FAIL"
@@ -970,6 +989,8 @@ class HealthTaskService:
                 "health_task_code": task.health_task_code,
                 "health_task_name": task.health_task_name,
                 "script_run_id": sr.id if sr else None,
+                "profile_key": str(profile.get("profile_key") or "") or None,
+                "directory_id": int(profile["id"]),
             }
             session.commit()
 
@@ -991,9 +1012,13 @@ class HealthTaskService:
                     script_run_id=exc_ctx["script_run_id"],
                     issue_type="EXCEPTION",
                     error_message=f"执行异常崩溃: {exc}",
+                    profile_key=exc_ctx["profile_key"],
+                    steal_run_id=run_id,
                 )
             except Exception:
                 logger.exception("[AutoRepair] 异常处理中触发自动排障失败")
+        if not dispatch_result.get("dispatched"):
+            self._unlock_profile_if_run(int(profile["id"]), run_id)
         return dispatch_result
 
     def _validate_payload(

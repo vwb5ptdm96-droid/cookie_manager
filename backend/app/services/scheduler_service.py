@@ -76,6 +76,15 @@ class HealthTaskScheduler:
 
         # Cookie 采集任务扫描（Phase 9：定时检测 + SYNCING 复检/超时收尾）
         self._scan_cookie_sync_tasks()
+        self._scan_auto_repair_stuck()
+
+    def _scan_auto_repair_stuck(self) -> None:
+        try:
+            from app.services.agent_repair_dispatcher import reap_stuck_auto_repair_tickets
+
+            reap_stuck_auto_repair_tickets(self.engine, self.runtime_root)
+        except Exception:
+            logger.exception("调度补扫自动排障卡死工单异常")
 
     def _scan_cookie_sync_tasks(self) -> None:
         """扫描 Cookie 采集任务：cron 到期触发检测；SYNCING 任务按上报完成复检 / 超时 FAIL。

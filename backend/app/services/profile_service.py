@@ -84,11 +84,57 @@ class ProfileService:
             session.refresh(row)
             return self._serialize(row)
 
+    def acquire_for_auto_repair(
+        self,
+        profile_key: str,
+        owner: str,
+        *,
+        steal_run_id: str | None = None,
+    ) -> dict[str, object]:
+        """Agent 占用目录锁：空闲则加锁；可接管刚结束的 run:{steal_run_id}。"""
+        with Session(self.engine) as session:
+            row = self._get_by_key(session, profile_key)
+            if row.is_locked and row.lock_owner != owner:
+                steal_owner = f"run:{steal_run_id}" if steal_run_id else None
+                can_steal = bool(
+                    steal_run_id
+                    and (
+                        row.lock_run_id == steal_run_id
+                        or row.lock_owner == steal_owner
+                    )
+                )
+                if not can_steal:
+                    raise AppError("Profile 已被其他任务锁定", "PROFILE_LOCKED", status_code=409)
+            row.is_locked = True
+            row.lock_owner = owner
+            row.lock_run_id = None
+            row.locked_at = datetime.now()
+            row.status = "LOCKED"
+            session.commit()
+            session.refresh(row)
+            return self._serialize(row)
+
     def unlock(self, profile_key: str) -> dict[str, object]:
         with Session(self.engine) as session:
             row = self._get_by_key(session, profile_key)
             row.is_locked = False
             row.lock_owner = None
+            if row.status == "LOCKED":
+                row.status = "READY" if self._resolve_profile_path(row.relative_path).exists() else "MISSING"
+            session.commit()
+            session.refresh(row)
+            return self._serialize(row)
+
+    def unlock_if_owner(self, profile_key: str, owner: str) -> dict[str, object]:
+        """仅当 lock_owner 匹配时解锁，避免误放其他任务的锁。"""
+        with Session(self.engine) as session:
+            row = self._get_by_key(session, profile_key)
+            if row.lock_owner != owner:
+                return self._serialize(row)
+            row.is_locked = False
+            row.lock_owner = None
+            row.lock_run_id = None
+            row.locked_at = None
             if row.status == "LOCKED":
                 row.status = "READY" if self._resolve_profile_path(row.relative_path).exists() else "MISSING"
             session.commit()

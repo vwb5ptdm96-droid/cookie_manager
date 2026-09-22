@@ -80,6 +80,10 @@ def _make_service(
     monkeypatch.setattr(
         "app.services.cookie_sync_task_service.perform_health_request", fake_http
     )
+    monkeypatch.setattr(
+        "app.services.agent_repair_dispatcher.trigger_cookie_sync_repair",
+        lambda *args, **kwargs: {"dispatched": False, "reason": "test-skip"},
+    )
     service = CookieSyncTaskService(engine=engine, cookie_engine=engine, notifier=notifier)
     return service, engine, notifier
 

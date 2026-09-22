@@ -7,8 +7,10 @@ function navigateWithFlag(path: string, flag: string) {
 }
 
 export function useGlobalQuickActions() {
+  const router = useRouter();
   return {
     openEnvironmentChecks: navigateWithFlag("/environment", "autorun"),
     openScriptUpload: navigateWithFlag("/scripts", "upload"),
+    openDutyDesk: () => router.push("/auto-repair-tickets"),
   };
 }

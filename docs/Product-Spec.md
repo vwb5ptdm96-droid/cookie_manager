@@ -14,8 +14,9 @@
 
 ### 1.1 产品摘要
 
-这是一个部署在单台 Windows 机器上的内部运维系统，用来维护电商平台采集脚本依赖的 session/cookie 登录态。  
-系统通过健康检测任务定期或手动检测旧 cookie 是否失效，失败时自动触发本机 Playwright 维护脚本刷新登录态，并通过飞书通知提醒运维人员。遇到短信、扫码、验证码等风控时，不生成人工修复工单，只发送提醒，由运维人员判断后续处理。
+这是一个部署在单台 Windows 机器上的内部运维系统，用来维护电商/内容平台采集脚本依赖的 session/cookie 登录态。  
+系统通过**健康检测任务**定期或手动检测旧 cookie 是否失效；失败时可自动触发本机 Playwright 维护脚本刷新登录态，并通过飞书通知运维。并行提供 **Cookie 采集任务**（同事浏览器扩展补采写回）与 **手动一键上报**旁路。  
+修复脚本返回 `FAIL` / 异常 / `RISK`（风控）时进入**自动排障闭环**（SCOPE-019）：建自动排障工单并按冷却/预算唤起本机 Claude Code 连接 CDP 现场诊断；遇短信/扫码/滑块等人机验证**不自动绕过**，判 `NEED_HUMAN` 关调试端口并飞书转人工。已废弃的人工修复工单（打开修复浏览器复检）不再使用（OUT-007）。
 
 ### 1.2 用户问题
 
@@ -37,8 +38,8 @@
 |---|---|
 | 健康检测闭环可用 | 可为指定 cookie 定位条件配置检测任务并手动/定时执行，失败后能触发绑定修复脚本 |
 | 修复闭环可用 | 修复脚本可成功执行本机脚本，并将成功、失败、风控结果回写系统状态、运行日志与 ScriptRun 实例 |
-| 失败提醒可用 | 检测失败或修复遇风控时，通过飞书通知提醒运维人员 |
-| 运维可观测性可用 | 用户可在前端查看健康检测任务、脚本运行、Profile、脚本、环境自检和运行日志 |
+| 失败提醒与排障可用 | 检测失败、修复失败/风控时飞书可达；自动排障工单有终态（SOLVED / NEED_HUMAN / FAILED） |
+| 运维可观测性可用 | 用户可在前端查看健康检测任务、Cookie 采集任务、脚本运行、Profile、脚本、环境自检和运行日志（自动排障列表页 SCOPE-020 为 P1） |
 
 ---
 
@@ -48,7 +49,7 @@
 
 | 编号 | 内容 | 优先级 | 备注 |
 |---|---|---|---|
-| SCOPE-001 | Windows 单机部署的 Session 健康检测与修复系统 | P0 | 不依赖 Docker；本地目录 + CMD/BAT 启动，生产托管为 Windows 服务（见 SCOPE-018） |
+| SCOPE-001 | Windows 单机部署的 Session 健康检测与修复系统 | P0 | 不依赖 Docker；本地目录 + CMD/BAT 启动；生产以**交互会话计划任务**托管（见 SCOPE-018） |
 | SCOPE-002 | 健康检测任务 CRUD、启停、克隆、删除、手动检测、手动修复 | P0 | 以健康检测任务为系统核心，绑定修复脚本与 Profile |
 | SCOPE-003 | 定时调度 | P0 | APScheduler 扫描启用任务，按 cron 表达式触发检测与修复 |
 | SCOPE-004 | Profile 目录注册、校验、锁定/解锁、复检 | P0 | 路径基于 `RUNTIME_ROOT` 解析；锁定由脚本运行持有 |
@@ -65,7 +66,7 @@
 | SCOPE-015 | 部署配置可移植化 | P0 | 启动链路全部从 `.env` 读取（端口/路径/Chrome 路径），清理硬编码端口与盘符，部署机无 E 盘、默认端口被占时改 `.env` 即可启动 |
 | SCOPE-016 | 目录库 CDP 调试功能 | P0 | 目录库每目录存默认调试端口；可一键拉起/关闭带该目录（`--user-data-dir`）的可见 Chrome，CDP 端口供外部脚本连接调试；Chrome 路径走 `CHROME_PATH` |
 | SCOPE-017 | 手动 Cookie 上报扩展 | P0 | 独立 MV3 Chrome 扩展「Cookie 一键上报」，以页面内可移动悬浮球为主入口，一键抓取当前页面 cookie 与请求头，手动填写 `channel/shop_name/mobile_phone/dns` 写回 `ods_cookie_playwright`；请求头经 `chrome.debugger`（CDP 通道）捕获当前域名 API 完整请求头（含受保护头）一并入库；不经映射表、无采集者概念；重复上传按四字段 upsert；没抓到 cookie 时支持刷新当前页面重抓；内置后端联通测试；纯粹独立、不挂平台前端 |
-| SCOPE-018 | Windows Service 化托管 | P0 | 生产后端注册为 Windows 服务（NSSM `SessionBackend`）：开机自启、崩溃自动重启、日志轮转；启动入口 `run_server.py`（先 `alembic upgrade head` 再起 uvicorn），路径自身推导不绑定盘符 |
+| SCOPE-018 | 生产交互会话计划任务托管 | P0 | 生产唯一入口为计划任务 `SessionBackend-Interactive`（`start_interactive.bat` → `run_server.py`：先 `alembic upgrade head` 再起 uvicorn），在登录桌面会话运行以便有头 Chrome/CDP 可见；`restart_backend.bat` 负责先 `/end` 再 `/run`；`tools/watchdog.py` + `SessionBackend-Watchdog` 探活告警；日志轮转落 `runtime/logs`；历史 NSSM `SessionBackend` 已停用 |
 | SCOPE-019 | 自动排障闭环（后端） | P0 | 修复脚本执行返回 `FAIL` / 抛异常 / 返回 `RISK` 时，自动生成自动排障工单（独立于已废弃的人工工单），并按落库冷却/预算节流唤起本机 Claude Code 连接 CDP 现场排障；排障结果回写工单（SOLVED / NEED_HUMAN）；NEED_HUMAN 时关闭调试端口并飞书告警转人工 |
 | SCOPE-020 | 自动排障工单前端列表页 | P1 | 查看自动排障工单 PENDING→RUNNING→SOLVED/NEED_HUMAN 流转、失败类型与排障结论；人工可标记接手/关闭 |
 
@@ -74,12 +75,12 @@
 | 编号 | 内容 | 原因 |
 |---|---|---|
 | OUT-001 | 多节点/分布式执行架构 | 当前方案明确为单台 Windows 机器本机执行 |
-| OUT-002 | Docker、容器编排 | 部署形态为 Windows 原生：本地目录 + CMD/BAT 启动，生产由 Windows 服务托管（见 SCOPE-018），不引入容器 |
+| OUT-002 | Docker、容器编排 | 部署形态为 Windows 原生：本地目录 + CMD/BAT 启动，生产由交互会话计划任务托管（见 SCOPE-018），不引入容器 |
 | OUT-003 | 面向外部客户的多租户能力 | 当前定位是公司内部运维系统 |
 | OUT-004 | 自动绕过短信、扫码、验证码、设备验证 | 即使风控(RISK) 进入自动排障，排障 agent 也只诊断判级、不执行人机验证自动绕过；遇滑块/拼图/疑似封禁立即停止并转人工（见 SCOPE-019、OUT-012） |
 | OUT-005 | 自主 Agent 编排、多 Agent 协作 | 产品不引入自主任务编排与多 Agent 协作；仅支持单次、定向的排障 agent 调用（见 SCOPE-019），排障范围严格限定在脚本失败的现场处理 |
 | OUT-006 | 重构旧 cookie 表结构 | 沿用既有字段（channel/shop_name/mobile_phone/DNS/cookie/str_cookie 等）；新增扩展采集写回能力，但不新增、不修改旧表列结构 |
-| OUT-007 | 人工修复工单、打开修复浏览器、复检闭环 | 已废弃，失败只通过飞书提醒 |
+| OUT-007 | 人工修复工单、打开修复浏览器、复检闭环 | 已废弃；失败/风控走飞书 + 自动排障工单（SCOPE-019），不再生成 ManualRepairTicket |
 | OUT-008 | 独立"维护任务"模块与旧版"健康检测"模块 | 已废弃，被健康检测任务统一取代 |
 | OUT-009 | 同一同事同一域名的多店铺登录态区分 | 本版假设一个 (worker_id, domain) 对应一条业务记录，多店铺场景浏览器侧需分 Profile，暂不处理 |
 | OUT-010 | 健康检测任务与采集任务自动联动 | 采集任务独立于健康检测任务，检测任务不自动触发采集，两个模块互不耦合 |
@@ -124,8 +125,8 @@
 
 **分支路径：**
 - 若修复脚本返回 `SUCCESS`，任务状态更新为 `PASS`。
-- 若脚本返回 `FAIL`，任务标记为 `FAIL` 并保留失败日志。
-- 若脚本返回 `RISK`，任务回到 `PENDING`，系统发送飞书提醒，不生成工单。
+- 若脚本返回 `FAIL`，任务标记为 `FAIL` 并保留失败日志；触发自动排障闭环（FLOW-007），并发送飞书提醒。
+- 若脚本返回 `RISK`，任务保留风控结果并发送飞书提醒；进入自动排障闭环做诊断判级（不自动过人机验证，见 OUT-004/012）；**不**再生成已废弃的人工修复工单。
 
 **边界情况：**
 - Profile 已锁定时，不允许启动新的脚本运行。
@@ -133,7 +134,7 @@
 - 路径非法或跳出 `RUNTIME_ROOT` 时，系统必须拒绝保存/执行。
 
 **完成状态：**
-用户可在任务列表、脚本运行页和日志中看到本次执行结果；若失败或风控，系统给出明确状态和飞书提醒。
+用户可在任务列表、脚本运行页和日志中看到本次执行结果；若失败或风控，系统给出明确状态、飞书提醒，并（在冷却/预算允许时）产生自动排障工单流转。
 
 ### FLOW-002: 定时检测发现失效并自动修复
 
@@ -286,21 +287,23 @@
 1. 修复脚本运行收尾状态为 FAIL / 异常 / RISK，系统按 `channel + shop_name` 查未结自动排障工单。
 2. 无未结工单 → 创建自动排障工单（PENDING，记录 issue_type=FAIL/EXCEPTION/RISK、channel、shop_name、cdp_port、script_path、健康任务与脚本运行关联）；有则复用并追加描述。
 3. 系统校验落库冷却与预算：冷却期内跳过唤起、仅刷新工单并记日志。
-4. 通过校验 → 系统以受限子进程唤起本机 Claude Code（Auto-Repair Worker 角色 + `/repair-ticket` SOP），携带工单号、脚本路径、CDP 端口；工单转 RUNNING。
-5. 排障 agent 经 `cdp_inspector.py` 探查活体 DOM/截图 → 定位遮罩/弹窗 → 单步 click 消除 → 重跑目标脚本验证（`--skip-db` 只验流程不落库）→ 输出诊断结论。
-6. agent 结论回写工单：SOLVED 或 NEED_HUMAN。
-7. SOLVED → 工单关闭记录结论；NEED_HUMAN → 系统关闭该目录调试 Chrome/端口、飞书告警（含工单号与诊断摘要）转人工接手。
+4. 通过校验 → **不先释放 Profile 目录锁**；以受限子进程唤起本机 Claude Code CLI（DeepSeek `deepseek-v4-flash-vision-exp` 直连、清代理、`--dangerously-skip-permissions`），注入 SOP + 项目记忆 + 本单实例包；工单转 RUNNING；锁 owner 转为 `auto-repair:{ticket_code}`。
+5. 排障 agent 经 `tools/cdp_inspector.py` 探查活体 DOM/截图（写入 `runtime/artifacts/<ticket>/`）→ FAIL/EXCEPTION 可改 `runtime/scripts`（先备份）并重跑 `--skip-db`；RISK 只诊断、不改脚本、不过验。
+6. 平台解析 `TICKET_RESULT` 后 **强制健康检测复检**（`execute_check(..., follow_up=False)`）。**仅 FAIL/EXCEPTION 且复检 PASS 才 SOLVED**；假 SOLVED / 复检失败 → 回滚脚本 + NEED_HUMAN。RISK 即使自报 SOLVED 也不得关单为修好。
+7. SOLVED → 工单关闭、保留脚本改动与 diff；NEED_HUMAN/FAILED → 关调试 Chrome/端口、飞书转人工、释放目录锁。
 
 **分支路径：**
-- RISK（风控）：排障 agent 只诊断判级；确认滑块/拼图/疑似封禁 → 立即 NEED_HUMAN 转人工，严禁反复尝试自动过验（OUT-012）。
+- RISK（风控）：排障 agent 只诊断判级；确认滑块/拼图/疑似封禁 → 立即 NEED_HUMAN 转人工，严禁反复尝试自动过验（OUT-012）；**不**走复检 PASS→SOLVED。
 - 唤起失败（claude CLI 缺失/异常/超预算）：工单置 FAILED + 飞书告警，不静默丢弃。
 - 冷却期内重复失败：不重复唤起，只更新既有工单描述并记日志。
+- 辅路径：调度每分钟补扫过久 PENDING / 超时 RUNNING（杀 `agent.pid` 后 FAILED）。
 
 **边界情况：**
 - 工单事务必须用独立 Session，禁止借用主修复事务（避免回滚目录锁释放/状态标记）。
 - 冷却与预算须落库，后端重启不失效。
 - 日志、工单与通知内容脱敏，不得明文记录 cookie/凭证（复用 `_mask_sensitive`）。
-- 修复流程收尾已释放目录锁后，排障 agent 探查不重新加业务目录锁。
+- Agent 工作期间 **必须持有 Profile 目录锁**（同目录互斥，跨目录可并行）；收尾 `unlock_if_owner`。
+- CLI 预算默认 **30 轮 / 900 秒**（可用 `AUTO_REPAIR_MAX_TURNS` / `AUTO_REPAIR_MAX_SECONDS` 覆盖）；过程可在 `/auto-repair-tickets` 查看。
 
 **完成状态：**
 每张自动排障工单都有明确终态（SOLVED 关闭 / NEED_HUMAN 转人工 + 飞书 / FAILED 告警），失败链路不再只留日志无兜底。
@@ -316,6 +319,7 @@
 - 整体采用后台运维工作台结构：左侧固定导航栏 + 右侧主内容区。
 - 左侧导航 MUST 按以下顺序提供一级入口：
   - 健康检测任务
+  - 自动排障
   - Cookie 采集任务
   - 脚本库
   - 目录库
@@ -471,7 +475,7 @@
 - MUST 仅允许绑定 `MAINTAIN` 类型修复脚本。
 - MUST 在执行修复前检查 Profile（目录）是否已锁定。
 - MUST 支持状态 `PENDING/PASS/FAIL/DISABLED`，运行结果状态 `SUCCESS/FAIL/RISK`。
-- MUST 检测失败时发送飞书通知；修复遇 `RISK` 时不生成工单，只发送提醒。
+- MUST 检测失败时发送飞书通知；修复返回 `FAIL` / 异常 / `RISK` 时进入自动排障闭环（SCOPE-019），**不**生成已废弃人工修复工单；`RISK` 场景排障仅诊断、不自动过人机验证。
 - SHOULD 支持克隆任务以快速复制配置。
 - SHOULD 支持独立修复 cron（`repair_cron_expression`）：调度器按该表达式周期性触发修复脚本；未配置时检测失败即时触发。
 
@@ -511,7 +515,7 @@
 **验收标准：**
 - [ ] AC-001: Given 用户填写完整检测任务信息, when 点击保存, then 系统成功创建任务并在列表显示。
 - [ ] AC-002: Given 任务绑定了被锁定的目录, when 用户执行修复, then 系统拒绝执行并返回锁冲突错误。
-- [ ] AC-003: Given 修复脚本返回 `RISK`, when 任务完成, then 任务状态回到 `PENDING` 且发送飞书提醒、不生成工单。
+- [ ] AC-003: Given 修复脚本返回 `RISK`, when 任务完成, then 发送飞书提醒，并按 SCOPE-019 创建/复用自动排障工单（冷却期内可不重复唤起 agent）；不生成 ManualRepairTicket。
 - [ ] AC-004: Given 检测失败且配置了自动修复, when 检测完成, then 系统自动触发修复脚本并创建 ScriptRun 实例。
 
 ### REQ-002: 脚本运行实例管理
@@ -984,9 +988,10 @@
 - MUST 以 `(channel, shop_name)`（取自已执行 HealthTask 行，禁止取 ScriptRegistry.platform/script_name）查未结工单（PENDING/RUNNING）；存在则复用并追加描述，不存在则新建。
 - MUST 工单独立模型 `AutoRepairTicket`（区别于已废弃 `ManualRepairTicket`），关键字段：`ticket_code, channel, shop_name, cdp_port, script_code, health_task_code, script_run_id, issue_type(FAIL/EXCEPTION/RISK), status(PENDING/RUNNING/SOLVED/NEED_HUMAN/FAILED), error_message, diagnosis, closed_at, created_at/updated_at`。
 - MUST 冷却与预算落库：同 `(channel, shop_name)` 上次唤起起冷却期内不再唤起（默认 30 分钟）；当日唤起达预算上限不再唤起（默认可配置）；跳过唤起时仍刷新既有工单并记日志。
-- MUST 以非阻塞子进程唤起本机 `claude` CLI，注入工单号/脚本路径/CDP 端口/SOP；单次硬性限制轮次与时长（默认 4 轮 / 120 秒），超限强制终止并落日志；stdout/stderr 落日志文件，禁止使用不读取的 PIPE（防缓冲阻塞）。
+- MUST 以非阻塞子进程唤起本机 `claude` CLI（优先 `claude.cmd`），注入 SOP/记忆/实例包、DeepSeek 直连 env 并清除代理；单次硬性限制轮次与时长（默认 30 轮 / 900 秒，可 env 覆盖），超限强制终止并落日志；stdout/stderr 落日志文件，禁止使用不读取的 PIPE（防缓冲阻塞）。
+- MUST `--dangerously-skip-permissions` 以便无人值守读写；工作目录为项目根，CDP 工具为仓库内 `tools/cdp_inspector.py`。
 - MUST claude CLI 缺失或唤起异常：工单置 FAILED + 飞书告警（含原因），不静默丢弃。
-- MUST agent 结论回写工单：SOLVED 或 NEED_HUMAN，携带 diagnosis 摘要（阻挡原因/处理动作/结果）。
+- MUST agent 结论回写工单：FAIL/EXCEPTION 仅当平台健康复检 PASS 才 SOLVED；否则 NEED_HUMAN 并默认回滚脚本。RISK 禁止 SOLVED。携带 diagnosis 摘要（阻挡原因/处理动作/结果）。
 - MUST NEED_HUMAN：关闭该目录调试 Chrome / 释放 CDP 端口 + 飞书告警（含工单号与诊断摘要）。
 - MUST RISK 路径：agent 只诊断判级，遇滑块/拼图/短信/扫码/疑似封禁立即 NEED_HUMAN 停止，不尝试自动过验（OUT-012）。
 - MUST 工单描述、日志与通知脱敏，不落 cookie/凭证明文（复用 `_mask_sensitive`）。
@@ -1008,7 +1013,7 @@
 - [ ] AC-001: Given 修复脚本返回 FAIL, when 收尾, then 自动排障工单创建或复用并进入 PENDING。
 - [ ] AC-002: Given 同店处于冷却期内再次 FAIL, when 收尾, then 不重复唤起 claude，仅刷新既有工单并记日志。
 - [ ] AC-003: Given 未装 claude CLI, when 触发, then 工单置 FAILED 且飞书收到告警。
-- [ ] AC-004: Given 排障 agent 结论 SOLVED, when 回写, then 工单关闭并保存 diagnosis。
+- [ ] AC-004: Given 排障 agent 结论 SOLVED 且健康复检 PASS, when 回写, then 工单关闭并保存 diagnosis；假 SOLVED（未复检/复检失败）不得 SOLVED。
 - [ ] AC-005: Given 排障 agent 结论 NEED_HUMAN（或 RISK 遇滑块）, when 回写, then 对应调试 Chrome/端口被关闭且飞书收到转人工告警。
 - [ ] AC-006: Given 真实 FAIL 触发自动排障, when 完成, then 主修复事务的目录锁释放与 FAIL 状态标记不受影响（独立 Session 回归验证）。
 - [ ] AC-007: Given 单次唤起超时长/超预算, when 强制终止, then claude 进程被回收且日志有终止记录。
@@ -1019,9 +1024,9 @@
 
 | AI 能力 | 触发 | 运行载体 | 输入 | 输出 |
 |---|---|---|---|---|
-| 脚本失败现场排障 | 修复脚本 FAIL/异常/RISK 收尾 | 本机 `claude` CLI（`-p` 非交互，限轮次/时长，受限子进程） | 工单号、script_path、cdp_port、channel/shop_name、错误摘要 | 诊断结论 + SOLVED/NEED_HUMAN 回写工单 |
+| 脚本失败现场排障 | 修复脚本 FAIL/异常/RISK 收尾 | 本机 `claude` CLI（`-p` 非交互，限轮次/时长，受限子进程） | SOP + 记忆 + 工单上下文 + CDP | 诊断 + 平台复检后 SOLVED/NEED_HUMAN |
 
-排障 agent 的 SOP（探查 → 分析 → 单步消除 → 重试验证 → 报告）由项目根 `CLAUDE.md`（Auto-Repair Worker）+ `.claude/commands/repair-ticket.md` + `.claude/tools/cdp_inspector.py` 承载，系统只负责建单、注入上下文、限时回收进程与落结果。
+排障 agent 的 SOP 由 `docs/agent/SOP-操作手册.md` + `docs/agent/memory/` + `tools/cdp_inspector.py` 承载；系统负责建单、注入上下文、持锁、复检、限时回收与落结果。
 
 **AI 护栏（绝不能做）：**
 - 严禁自动绕过或尝试完成人机验证（滑块/拼图/短信/扫码/设备验证）——识别即判 NEED_HUMAN 停止，转人工（OUT-012/013）。
@@ -1160,15 +1165,15 @@ MVP 完成条件：
 
 **运行边界**
 - 触发即用：仅当修复脚本运行 FAIL/异常/RISK 收尾时由系统唤起；单次任务结束即退出，无后台常驻、无自主续跑。
-- 上下文注入：系统在唤起点把工单号、目标脚本路径、CDP 端口、channel/shop_name、错误摘要写入 prompt；排障所需活体现场（DOM/截图/点击）经 `.claude/tools/cdp_inspector.py` 获取。
-- 预算硬限：单次限轮次（默认 4）与时长（默认 120s），超限由系统强制终止并回收子进程。
-- 角色与 SOP：项目根 `CLAUDE.md`（Auto-Repair Worker）定义角色红线；`.claude/commands/repair-ticket.md` 定义探查→分析→单步消除→重试验证→报告五步 SOP。
+- 上下文注入：系统在唤起点把 SOP、项目记忆、工单号、目标脚本路径、Profile、CDP 端口、channel/shop_name、错误摘要写入 prompt；排障所需活体现场经 `tools/cdp_inspector.py` 获取，截图落入 `runtime/artifacts/<ticket>/`。
+- 预算硬限：单次限轮次（默认 30）与时长（默认 900s），超限由系统强制终止并回收子进程。
+- 角色与 SOP：`docs/agent/SOP-操作手册.md` + `docs/agent/memory/`；成功标准为健康复检 PASS。
 
 **工具集**
 | 工具/载体 | 用途 |
 |---|---|
-| `claude` CLI（`-p` 非交互） | 排障 agent 运行载体 |
-| `cdp_inspector.py` | CDP 端口存活检查、连接、DOM 遮罩扫描、截图、单步 click |
+| `claude` CLI（`-p` 非交互 + `--dangerously-skip-permissions`） | 排障 agent 运行载体 |
+| `tools/cdp_inspector.py` | CDP 端口存活检查、连接、DOM 遮罩扫描、截图、单步 click |
 | 目标脚本（`python $script --cdp-port N --skip-db`） | 消除阻碍后重跑验证流程是否打通 |
 
 **安全护栏**
@@ -1176,3 +1181,4 @@ MVP 完成条件：
 - 冻结区：不改 `backend/app/core/`、不改数据库结构、不删 `user_data_dir`、不停正常后台服务。
 - 不可逆操作：未授权账号不执行破坏性操作，无法确认即转人工。
 - 落库隔离：排障触发/结果回写走独立 Session，不借用主修复事务；工单与日志内容脱敏。
+- 目录锁：Agent 全程持 Profile 锁；FAIL/EXCEPTION 改脚本须备份，复检失败回滚。

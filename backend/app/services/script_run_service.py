@@ -106,6 +106,7 @@ class ScriptRunService:
             return self._serialize(row)
 
     def cancel_run(self, run_id: str) -> dict[str, object]:
+        directory_key: str | None = None
         with Session(self.engine) as session:
             row = self._get_row(session, run_id)
             if row.status not in ("RUNNING", "PAUSED"):
@@ -130,9 +131,21 @@ class ScriptRunService:
                 row.duration_ms = int(
                     (row.end_time - row.start_time).total_seconds() * 1000
                 )
+            directory_key = row.directory_key
             session.commit()
             session.refresh(row)
-            return self._serialize(row)
+            result = self._serialize(row)
+
+        if directory_key:
+            try:
+                from app.services.profile_service import ProfileService
+
+                ProfileService(self.engine, self.runtime_root).unlock_if_owner(
+                    str(directory_key), f"run:{run_id}"
+                )
+            except Exception:
+                logger.exception("[ScriptRun] 取消后释放目录锁失败 run_id=%s key=%s", run_id, directory_key)
+        return result
 
     # ── 日志 ──
 

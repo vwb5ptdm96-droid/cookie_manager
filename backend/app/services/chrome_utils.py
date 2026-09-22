@@ -78,13 +78,14 @@ def launch_chrome_debug(profile_path: Path, cdp_port: int, chrome_path: Path) ->
 def kill_chrome_for_profile(profile_path: Path) -> None:
     """杀掉占用指定 user-data-dir 的 Chrome 进程（包括子进程），防止缓存污染。"""
     profile_str = str(profile_path).replace("/", "\\")
+    escaped_profile = profile_str.replace("'", "''")
     # 用 -EncodedCommand 解决中文路径编码问题。
     # Stop-Process 必须显式按 ProcessId 绑定：Get-CimInstance Win32_Process 返回的对象
     # 属性是 ProcessId 而非 Id，直接管道 Stop-Process 会因按 Id 绑定失败而静默不杀。
     ps_script = (
-        f'Get-CimInstance Win32_Process -Filter "name=\'chrome.exe\'" | '
-        f'Where-Object {{ $_.CommandLine -like \'*--user-data-dir={profile_str.replace("'", "''")}*\' }} | '
-        f'ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -PassThru }}'
+        "Get-CimInstance Win32_Process -Filter \"name='chrome.exe'\" | "
+        f"Where-Object {{ $_.CommandLine -like '*--user-data-dir={escaped_profile}*' }} | "
+        "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -PassThru }"
     )
     encoded = base64.b64encode(ps_script.encode("utf-16le")).decode()
     try:

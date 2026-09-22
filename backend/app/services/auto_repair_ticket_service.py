@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import Engine, select
+from sqlalchemy import Engine, func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -30,6 +30,10 @@ BEIJING_TZ = timezone(timedelta(hours=8))
 # 工单终态（一旦进入不再参与复用与唤起）
 TERMINAL_STATUSES = {"SOLVED", "NEED_HUMAN", "FAILED"}
 OPEN_STATUSES = ("PENDING", "RUNNING")
+REPAIR_ISSUE_TYPES = {"FAIL", "EXCEPTION", "RISK"}
+COOKIE_ISSUE_TYPES = {"NO_MAPPING", "JOB_TIMEOUT", "RECHECK_FAIL", "DISPATCH_FAILED"}
+MAX_DIAGNOSIS_CHARS = 4000
+MAX_ERROR_CHARS = 2000
 
 
 def beijing_now() -> datetime:
@@ -44,6 +48,15 @@ def _today_str(now: datetime | None = None) -> str:
 def _norm_shop(shop_name: str | None) -> str:
     """店铺键归一：None / 空串视为同一店铺，统一存空串。"""
     return (shop_name or "").strip()
+
+
+def _clip(text: str | None, limit: int) -> str | None:
+    if text is None:
+        return None
+    if len(text) <= limit:
+        return text
+    omitted = len(text) - limit
+    return text[:limit] + f"\n…(truncated {omitted} chars)"
 
 
 def _sanitize(text: str | None) -> str | None:
@@ -89,12 +102,16 @@ class AutoRepairTicketService:
         script_run_id: int | None = None,
         issue_type: str = "FAIL",
         error_message: str | None = None,
+        kind: str = "auto_repair",
+        cookie_sync_task_code: str | None = None,
     ) -> dict[str, Any]:
-        """按 (channel, shop_name) 查未结工单：存在则复用并更新到最新上下文，
+        """按 (kind, channel, shop_name) 查未结工单：存在则复用并更新到最新上下文，
         否则新建。error_message 入库前统一脱敏。返回序列化工单（含 is_new）。"""
-        if issue_type not in {"FAIL", "EXCEPTION", "RISK"}:
-            issue_type = "FAIL"
-        error_message = _sanitize(error_message)
+        kind = "cookie_sync" if kind == "cookie_sync" else "auto_repair"
+        allowed = COOKIE_ISSUE_TYPES if kind == "cookie_sync" else REPAIR_ISSUE_TYPES
+        if issue_type not in allowed:
+            issue_type = "RECHECK_FAIL" if kind == "cookie_sync" else "FAIL"
+        error_message = _clip(_sanitize(error_message), MAX_ERROR_CHARS)
         shop_key = _norm_shop(shop_name)
         ctx = {
             "cdp_port": cdp_port,
@@ -102,12 +119,26 @@ class AutoRepairTicketService:
             "health_task_code": health_task_code,
             "script_run_id": script_run_id,
             "issue_type": issue_type,
+            "kind": kind,
+            "cookie_sync_task_code": cookie_sync_task_code,
         }
         with Session(self.engine) as session:
-            existing = self._find_open(session, channel, shop_key)
+            existing = self._find_open(session, channel, shop_key, kind=kind)
             if existing is not None:
                 return self._reuse(session, existing, ctx, error_message)
-            return self._create(session, channel, shop_key, cdp_port, script_code, health_task_code, script_run_id, issue_type, error_message)
+            return self._create(
+                session,
+                channel,
+                shop_key,
+                cdp_port,
+                script_code,
+                health_task_code,
+                script_run_id,
+                issue_type,
+                error_message,
+                kind=kind,
+                cookie_sync_task_code=cookie_sync_task_code,
+            )
 
     # ── 店铺维度节流 ──
 
@@ -184,8 +215,8 @@ class AutoRepairTicketService:
         if status not in TERMINAL_STATUSES:
             logger.warning("[AutoRepair] 非法终态 %s，忽略", status)
             return
-        diagnosis = _sanitize(diagnosis)
-        error_message = _sanitize(error_message)
+        diagnosis = _clip(_sanitize(diagnosis), MAX_DIAGNOSIS_CHARS)
+        error_message = _clip(_sanitize(error_message), MAX_ERROR_CHARS)
         now = beijing_now()
         with Session(self.engine) as session:
             row = session.get(AutoRepairTicket, ticket_id)
@@ -206,6 +237,7 @@ class AutoRepairTicketService:
         self,
         *,
         status: str | None = None,
+        kind: str | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
@@ -213,23 +245,63 @@ class AutoRepairTicketService:
             stmt = select(AutoRepairTicket).order_by(AutoRepairTicket.id.desc())
             if status:
                 stmt = stmt.where(AutoRepairTicket.status == status)
+            if kind:
+                stmt = stmt.where(AutoRepairTicket.kind == kind)
             rows = session.execute(stmt.limit(limit).offset(offset)).scalars().all()
             return [self._serialize(row) for row in rows]
+
+    def status_counts(self) -> dict[str, int]:
+        with Session(self.engine) as session:
+            rows = session.execute(
+                select(AutoRepairTicket.status, func.count())
+                .group_by(AutoRepairTicket.status)
+            ).all()
+        counts = {str(status): int(n) for status, n in rows}
+        counts["running"] = counts.get("RUNNING", 0)
+        counts["pending"] = counts.get("PENDING", 0)
+        counts["total"] = sum(int(v) for k, v in counts.items() if k not in {"running", "pending", "total"})
+        return counts
 
     def get_ticket(self, ticket_id: int) -> dict[str, Any] | None:
         with Session(self.engine) as session:
             row = session.get(AutoRepairTicket, ticket_id)
             return self._serialize(row) if row is not None else None
 
+    def list_stale_running(self, older_than: datetime) -> list[dict[str, Any]]:
+        with Session(self.engine) as session:
+            rows = session.execute(
+                select(AutoRepairTicket).where(
+                    AutoRepairTicket.status == "RUNNING",
+                    AutoRepairTicket.last_dispatched_at.is_not(None),
+                    AutoRepairTicket.last_dispatched_at < older_than,
+                )
+            ).scalars().all()
+            return [self._serialize(row) for row in rows]
+
+    def list_stale_pending(self, older_than: datetime) -> list[dict[str, Any]]:
+        from app.core.time_utils import db_naive_as_beijing
+
+        with Session(self.engine) as session:
+            rows = session.execute(
+                select(AutoRepairTicket).where(AutoRepairTicket.status == "PENDING")
+            ).scalars().all()
+            stale = []
+            for row in rows:
+                created = db_naive_as_beijing(row.created_at, now=older_than + timedelta(seconds=1))
+                if created is not None and created < older_than:
+                    stale.append(self._serialize(row))
+            return stale
+
     # ── 内部 ──
 
     @staticmethod
-    def _find_open(session: Session, channel: str, shop_key: str) -> AutoRepairTicket | None:
+    def _find_open(session: Session, channel: str, shop_key: str, *, kind: str = "auto_repair") -> AutoRepairTicket | None:
         return session.execute(
             select(AutoRepairTicket)
             .where(
                 AutoRepairTicket.channel == channel,
                 AutoRepairTicket.shop_name == shop_key,
+                AutoRepairTicket.kind == kind,
                 AutoRepairTicket.status.in_(OPEN_STATUSES),
             )
             .order_by(AutoRepairTicket.id.desc())
@@ -259,11 +331,12 @@ class AutoRepairTicketService:
             if value is not None:
                 setattr(row, key, value)
         if error_message:
-            row.error_message = (
+            combined = (
                 f"{row.error_message}\n[再次失败] {error_message}"
                 if row.error_message
                 else f"[首次失败] {error_message}"
             )
+            row.error_message = _clip(combined, MAX_ERROR_CHARS)
         session.commit()
         session.refresh(row)
         result = self._serialize(row)
@@ -281,9 +354,13 @@ class AutoRepairTicketService:
         script_run_id: int | None,
         issue_type: str,
         error_message: str | None,
+        *,
+        kind: str = "auto_repair",
+        cookie_sync_task_code: str | None = None,
     ) -> dict[str, Any]:
+        prefix = "cst_" if kind == "cookie_sync" else "art_"
         row = AutoRepairTicket(
-            ticket_code=f"art_{uuid4().hex[:10]}",
+            ticket_code=f"{prefix}{uuid4().hex[:10]}",
             channel=channel,
             shop_name=shop_key,
             cdp_port=cdp_port or 9222,
@@ -291,8 +368,11 @@ class AutoRepairTicketService:
             health_task_code=health_task_code,
             script_run_id=script_run_id,
             issue_type=issue_type,
+            kind=kind,
+            cookie_sync_task_code=cookie_sync_task_code,
             status="PENDING",
             error_message=error_message,
+            created_at=beijing_now(),
         )
         session.add(row)
         try:
@@ -317,6 +397,8 @@ class AutoRepairTicketService:
             "health_task_code": row.health_task_code,
             "script_run_id": row.script_run_id,
             "issue_type": row.issue_type,
+            "kind": getattr(row, "kind", None) or "auto_repair",
+            "cookie_sync_task_code": getattr(row, "cookie_sync_task_code", None),
             "status": row.status,
             "error_message": row.error_message,
             "diagnosis": row.diagnosis,

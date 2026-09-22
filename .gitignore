@@ -7,9 +7,15 @@ node_modules/
 dist/
 coverage/
 .DS_Store
-runtime/
 .idea/
 .claude/
+
+# 运行时：跟踪维护脚本，不跟踪目录库 / 日志 / 产物
+runtime/**
+!runtime/scripts/
+!runtime/scripts/**
+runtime/scripts/**/__pycache__/
+runtime-preview/
 
 # 日志与运行时产物
 *.log

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
+import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 
 import {
@@ -13,6 +14,8 @@ import {
   resumeScriptRun,
   type ScriptRunItem,
 } from "@/api/scriptRuns";
+
+const router = useRouter();
 
 const loading = ref(false);
 const runs = ref<ScriptRunItem[]>([]);
@@ -243,7 +246,7 @@ onMounted(loadData);
             </template>
           </el-table-column>
           <el-table-column prop="pid" label="PID" min-width="80" />
-          <el-table-column label="操作" width="300" fixed="right">
+          <el-table-column label="操作" width="360" fixed="right">
             <template #default="{ row }">
               <div class="actions">
                 <el-button size="small" @click="openLog(row)">日志</el-button>
@@ -265,6 +268,11 @@ onMounted(loadData);
                   type="danger"
                   @click="handleCancel(row)"
                 >取消</el-button>
+                <el-button
+                  v-if="['RUNNING', 'PAUSED', 'FAIL', 'RISK'].includes(row.status)"
+                  size="small"
+                  @click="router.push({ path: '/auto-repair-tickets', query: row.status === 'RUNNING' ? { keyword: row.health_task_code || row.run_id, sre: 'recycle' } : { keyword: row.health_task_code || row.run_id } })"
+                >去值班台</el-button>
               </div>
             </template>
           </el-table-column>

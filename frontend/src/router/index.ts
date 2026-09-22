@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from "vue-router";
 
+import AutoRepairTicketsView from "@/views/AutoRepairTicketsView.vue";
 import CookieSyncTasksView from "@/views/CookieSyncTasksView.vue";
 import DeployView from "@/views/DeployView.vue";
 import EnvironmentView from "@/views/EnvironmentView.vue";
@@ -17,7 +18,15 @@ const routes = [
     component: HealthTasksView,
     meta: {
       title: "健康检测任务",
-      description: "配置旧 cookie 检测规则、高级调度和失败后自动修复。检测失败时自动执行维护脚本并写入新 cookie。",
+      description: "配置旧 cookie 检测规则、cron 调度与失败后本机 Playwright 自动修复；修复 FAIL/RISK 可进入自动排障（飞书 + Claude CDP）。",
+    },
+  },
+  {
+    path: "/auto-repair-tickets",
+    component: AutoRepairTicketsView,
+    meta: {
+      title: "值班台",
+      description: "早报、排障工单过程；可值班问答（只读）。追问默认不改脚本。",
     },
   },
   {

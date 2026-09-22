@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { EditPen } from "@element-plus/icons-vue";
 import { ArrowDown } from "@element-plus/icons-vue";
@@ -25,6 +26,9 @@ import {
   type CookieSyncMappingCreatePayload,
   type CookieSyncMappingItem,
 } from "@/api/cookieSyncMappings";
+
+const router = useRouter();
+const route = useRoute();
 
 // ── 采集任务 ──
 const tasks = ref<CookieSyncTaskItem[]>([]);
@@ -529,6 +533,8 @@ function onTabChange(name: string): void {
 }
 
 onMounted(() => {
+  const keyword = String(route.query.keyword || "").trim();
+  if (keyword) filters.keyword = keyword;
   void loadTasks();
   void loadMappings();
 });
@@ -584,7 +590,7 @@ onMounted(() => {
                   <span class="cell-muted">{{ formatBeijingTime(row.last_sync_at) || "-" }}</span>
                 </template>
               </el-table-column>
-              <el-table-column label="操作" width="300" fixed="right">
+              <el-table-column label="操作" width="360" fixed="right">
                 <template #default="{ row }">
                   <div class="actions">
                     <el-button size="small" @click="openTaskEdit(row)">编辑</el-button>
@@ -600,6 +606,10 @@ onMounted(() => {
                       :loading="checkingCode === row.cookie_sync_task_code"
                       @click="handleCheck(row)"
                     >检测</el-button>
+                    <el-button
+                      size="small"
+                      @click="router.push({ path: '/auto-repair-tickets', query: { keyword: row.shop_name || row.cookie_sync_task_name } })"
+                    >去值班台</el-button>
                     <el-dropdown trigger="click" @command="(cmd: string) => handleTaskAction(cmd, row)">
                       <el-button size="small">
                         更多<el-icon class="el-icon--right"><ArrowDown /></el-icon>

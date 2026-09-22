@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.core.database import Base
 from app.core.errors import AppError
 from app.models.script_run import ScriptRun
+from app.services.profile_service import ProfilePayload, ProfileService
 from app.services.script_run_service import ScriptRunService
 
 
@@ -94,3 +95,34 @@ def test_cancel_finished_run_rejected(tmp_path: Path) -> None:
         service.cancel_run("run_test")
 
     assert exc_info.value.error_code == "INVALID_STATUS"
+
+
+def test_cancel_run_releases_directory_lock(tmp_path: Path) -> None:
+    service = build_service(tmp_path)
+    seed_run(service, pid=1234)
+    profiles = ProfileService(engine=service.engine, runtime_root=service.runtime_root)
+    profiles.upsert(ProfilePayload(profile_key="profile_001", relative_path="profiles/ks/demo"))
+    profiles.lock("profile_001", owner="run:run_test")
+
+    with patch.object(service, "_kill_process_tree"):
+        service.cancel_run("run_test")
+
+    row = profiles.list_profiles()[0]
+    assert row["is_locked"] is False
+    assert row["lock_owner"] is None
+
+
+def test_cancel_run_does_not_unlock_foreign_owner(tmp_path: Path) -> None:
+    service = build_service(tmp_path)
+    seed_run(service, pid=1234)
+    profiles = ProfileService(engine=service.engine, runtime_root=service.runtime_root)
+    profiles.upsert(ProfilePayload(profile_key="profile_001", relative_path="profiles/ks/demo"))
+    profiles.lock("profile_001", owner="auto-repair:art_abc")
+
+    with patch.object(service, "_kill_process_tree"):
+        service.cancel_run("run_test")
+
+    row = profiles.list_profiles()[0]
+    assert row["is_locked"] is True
+    assert row["lock_owner"] == "auto-repair:art_abc"
+

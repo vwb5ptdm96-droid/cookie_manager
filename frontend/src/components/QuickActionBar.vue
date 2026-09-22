@@ -4,11 +4,13 @@ import { useGlobalQuickActions } from "@/composables/use-global-quick-actions";
 const {
   openEnvironmentChecks,
   openScriptUpload,
+  openDutyDesk,
 } = useGlobalQuickActions();
 </script>
 
 <template>
   <div class="quick-action-bar">
+    <el-button @click="openDutyDesk">打开值班台</el-button>
     <el-button @click="openEnvironmentChecks">执行环境自检</el-button>
     <el-button type="primary" @click="openScriptUpload">上传脚本</el-button>
   </div>

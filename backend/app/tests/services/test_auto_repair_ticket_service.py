@@ -1,9 +1,11 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 
 from app.core.database import Base
-from app.services.auto_repair_ticket_service import AutoRepairTicketService
+from app.models.auto_repair_ticket import AutoRepairTicket
+from app.services.auto_repair_ticket_service import AutoRepairTicketService, beijing_now
 
 
 def build_service(tmp_path, cooldown_seconds: int = 1800, daily_budget: int = 6) -> AutoRepairTicketService:
@@ -41,6 +43,34 @@ def test_shop_key_normalizes_none_and_empty(tmp_path) -> None:
     assert second["is_new"] is False
     assert second["id"] == first["id"]
     assert second["shop_name"] == ""
+
+
+def test_cookie_sync_ticket_does_not_reuse_repair_ticket(tmp_path) -> None:
+    svc = build_service(tmp_path)
+    repair = svc.create_or_reuse(**base_ctx())
+    cookie = svc.create_or_reuse(
+        channel="PDD",
+        shop_name="卫官",
+        issue_type="NO_MAPPING",
+        kind="cookie_sync",
+        cookie_sync_task_code="cst_demo",
+        error_message="无映射",
+    )
+    assert cookie["is_new"] is True
+    assert cookie["id"] != repair["id"]
+    assert cookie["kind"] == "cookie_sync"
+    assert cookie["ticket_code"].startswith("cst_")
+    again = svc.create_or_reuse(
+        channel="PDD",
+        shop_name="卫官",
+        issue_type="JOB_TIMEOUT",
+        kind="cookie_sync",
+        cookie_sync_task_code="cst_demo",
+        error_message="超时",
+    )
+    assert again["is_new"] is False
+    assert again["id"] == cookie["id"]
+    assert again["issue_type"] == "JOB_TIMEOUT"
 
 
 def test_same_open_ticket_reused_and_context_updated(tmp_path) -> None:
@@ -135,3 +165,42 @@ def test_record_result_statuses(tmp_path) -> None:
     t3 = svc.create_or_reuse(**base_ctx())
     svc.record_result(t3["id"], status="BOGUS")  # 非法终态忽略
     assert svc.get_ticket(t3["id"])["status"] == "PENDING"
+
+
+def test_record_result_clips_oversized_diagnosis(tmp_path) -> None:
+    from app.services.auto_repair_ticket_service import MAX_DIAGNOSIS_CHARS
+
+    svc = build_service(tmp_path)
+    ticket = svc.create_or_reuse(**base_ctx())
+    svc.record_result(ticket["id"], status="FAILED", diagnosis="D" * (MAX_DIAGNOSIS_CHARS + 5000))
+    row = svc.get_ticket(ticket["id"])
+    assert row["diagnosis"] is not None
+    assert len(row["diagnosis"]) <= MAX_DIAGNOSIS_CHARS + 80
+    assert "truncated" in row["diagnosis"]
+
+
+def test_reuse_clips_concatenated_error_message(tmp_path) -> None:
+    from app.services.auto_repair_ticket_service import MAX_ERROR_CHARS
+
+    svc = build_service(tmp_path)
+    first = svc.create_or_reuse(**base_ctx(error_message="E" * 1500))
+    second = svc.create_or_reuse(**base_ctx(error_message="F" * 1500))
+    assert second["id"] == first["id"]
+    msg = second["error_message"] or ""
+    assert len(msg) <= MAX_ERROR_CHARS + 80
+    assert "truncated" in msg
+
+
+def test_utc_created_at_not_immediately_stale_pending(tmp_path) -> None:
+    svc = build_service(tmp_path)
+    ticket = svc.create_or_reuse(**base_ctx())
+    now = beijing_now()
+    with Session(svc.engine) as session:
+        row = session.get(AutoRepairTicket, ticket["id"])
+        assert row is not None
+        row.created_at = now - timedelta(hours=8)
+        session.commit()
+    stale = svc.list_stale_pending(now - timedelta(seconds=300))
+    assert all(item["id"] != ticket["id"] for item in stale)
+
+

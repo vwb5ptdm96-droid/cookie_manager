@@ -1,5 +1,88 @@
 # Product Spec Changelog
 
+## 2026-09-20 · S5 SRE 确认闸（回收停滞 / 重启后端）
+
+- `POST /api/agent/sre/recycle-stale-runs`、`restart-backend` 必须 `confirmed=true`，否则 `SRE_GATE_REQUIRED`。
+- 无闸：`GET /agent/sre/explain`、`POST /agent/sre/env-check`、`GET /agent/sre/health-probe`。
+- 值班台右列确认框；对话不能重启。Windows 才真跑 `restart_backend.bat`（异步调度 + 探活）；macOS 默认 dry-run。
+- 脚本运行页 RUNNING「去值班台」带 `?sre=recycle`。
+
+## 2026-09-21 · S0 时区 / ticket 目录 / 脚本入库
+
+- `created_at` 用北京时间写入；UTC naive 落后约 8h 才折算，避免 PENDING/ScriptRun 误超时。
+- CLI cwd = `runtime/artifacts/<ticket>`，写入 `ticket_pack.json`；CDP 脚本用绝对路径。
+- 排障目标脚本不在 `runtime/scripts` 则直接失败。
+- git 跟踪 `runtime/scripts/`，仍忽略 profiles/logs/artifacts。
+
+## 2026-09-20 · S4 采集失败另立 cookie_sync 工单
+
+- 工单加 `kind` / `cookie_sync_task_code`（迁移 0016）。同店排障单与采集单互不复用。
+- 无映射 / 下发失败 / 复检失败 / 等待超时 → Collector 工单；成功 = 采集复检 PASS；无映射只能 NEED_HUMAN。
+- Collector 工具：`sync_mapping_get` / `sync_dispatch` / `sync_recheck` / `ticket_conclude`；禁止 CDP 与改脚本。
+- 值班台列表区分「采集 / 排障」。
+- 未做：S5 重启闸。
+
+## 2026-09-20 · S3 进程内 loop（Repairer + Watcher 问答）
+
+- 新增 `agent_loop.py` / `agent_tools.py`：DeepSeek Anthropic 兼容端 tool-calling；Watcher 只读工具；Repairer 含 CDP/脚本/复检/`ticket_conclude`。
+- `ticket_conclude(SOLVED)` 必须先 `health_recheck=PASS`；RISK 禁止 SOLVED。
+- dispatcher 默认走进程内 loop；`AUTO_REPAIR_USE_CLI=1` 才回退 Claude CLI json。
+- 工作台无单问答开放（只读）；追问仍不改脚本。
+- 未做：S4 采集工单、S5 重启闸、repair_rerun 工具。
+
+## 2026-09-20 · 值班台 S2 落地（早报 + 关掉无单提问）
+
+- 新增 `GET /api/agent/ops-summary` 只读早报。
+- 值班台：工单列、早报计数、「需要人看」深链；导航改「值班台」；快捷栏「打开值班台」。
+- 健康检测「看排障」、采集/脚本运行「去值班台」深链。
+- S0：`unwrap_cli_log` 覆盖 CLI json 信封 / stream-json / nested content，并补单测。
+
+## 2026-09-20 · 站点值班 Agent 概念锁定（实现未开始）
+
+- 决策：Agent 从「FAIL 排障工人」扩成站点值班内核。矩阵见 `docs/agent/SITE-OPERATOR-MATRIX.md`；基线 §12 见 `docs/agent/AGENT-MAINTENANCE-LAYER.md`。
+- 拍板：采集失败另立 `cookie_sync` 工单（Collector，成功=采集复检 PASS）；早报只工作台不飞书；无单对话等进程内 loop；重启后端可进工具但须工作台确认。
+- 排障红线不放宽：健康复检 PASS、人机即停、Profile 锁、禁止扫其它工单。
+- 新增：`docs/agent/SOP-值班手册.md`、`docs/agent/SITE-OPERATOR-UX.md`。SOP-操作手册仍只给 Repairer。
+- UX：9 页信息架构保留；值班台改语义；业务页只加深链；S3 前禁止无单全站提问。
+- 说明：未改代码、未改 Product-Spec SCOPE 编号；S0 仍是 json 结论 unwrap。
+
+## 2026-09-05 · Slice E：选项 B 测试 + FLOW-007/REQ-011 回写
+
+- 测试：`test_auto_repair_slice_e.py` 覆盖 FAIL/EXCEPTION（可改脚本、SOLVED⇔复检 PASS）与 RISK（只诊断、禁止 SOLVED、不备份）。
+- 回写 FLOW-007 / REQ-011 / IA-001 / §11：持目录锁、复检 PASS 才 SOLVED、CLI 30 轮/900s、DeepSeek 直连、`tools/cdp_inspector.py`、薄前端 `/auto-repair-tickets`。
+- P2 仍推迟：脚本文件锁、Key 迁环境变量、stream-json、全局 semaphore 调参。
+
+## 2026-09-05 · 触发策略锁定为 B
+
+- FAIL + EXCEPTION：全量自动排障（改脚本 + 以健康复检 PASS 为 SOLVED）。
+- RISK：仍唤起 Claude CLI，但仅诊断判级（不改脚本、不过验），结论偏 NEED_HUMAN。
+- 见 `docs/agent/GAP-ANALYSIS-DISPATCHER.md` G-TRIGGER-SCOPE。
+
+## 2026-09-05 · Windows 探活通过（CLI + Vision-Exp 直连）
+
+- 节点：`SD-20251221BCDN`；Claude Code **2.1.259**；Key 在 `~/.claude/settings.json`；用户 settings 含 **7897 代理**（Agent 子进程须清除）。
+- 直连 API：models 含 vision-exp；flash 文本 pong OK；Vision OpenAI/Anthropic 看图 OK。
+- CLI：需 `claude.cmd` + **`--dangerously-skip-permissions`** 才能无人值守读写；文本/改文件/看图均通过；有 `unrecognized_model` 告警（可用 disable window enforcement 或 model map）。
+- 详见 `docs/agent/ENHANCEMENT-PATH-CLAUDE-CLI-DEEPSEEK.md` §6.1。
+
+## 2026-09-05 · 增强路径锁定：Claude Code CLI + DeepSeek Vision-Exp
+
+- 新增：`docs/agent/ENHANCEMENT-PATH-CLAUDE-CLI-DEEPSEEK.md`。
+- 锁定：Agent 壳 = Claude Code CLI；主模型 = `deepseek-v4-flash-vision-exp`；API = `https://api.deepseek.com/anthropic`；Windows 已有 Key；**直连 DeepSeek，不走本地代理**；子进程注入 env，不污染全局 Claude 配置；文本兜底 `deepseek-v4-flash`。
+- 说明：实现与探活待做；成功标准仍为健康复检 PASS。
+
+## 2026-09-05 · Agent 维护层共识锁定 + 手册/记忆落点
+
+- 新增：`docs/agent/`——`AGENT-MAINTENANCE-LAYER.md`（LOCKED 共识）、`SOP-操作手册.md`、`memory/`（项目运转 + scripts/shops 模板）。
+- 锁定：成功=健康复检 PASS；FAIL 事件主触发+定时补漏；目录锁并发；允许脚本落盘且前端必显 diff；思考/操作内网全文可看；薄前端服务修好率；增强 019，网关/模型另议。
+- 说明：尚未改后端 dispatcher/前端实现；与旧 FLOW-007「Agent 不持目录锁」冲突点以 agent 共识文档为准（实现时回写 Spec）。
+
+## 2026-09-05 · 文档基本面回写（对齐仓库现状）
+
+- 重写：`docs/功能清单.md`——以当前 `AppShell` 8 项导航、健康检测/采集双闭环、扩展 API、自动排障后端、计划任务生产入口为准；明确废弃模块（dashboard/session_tasks/health_checks/repairs）仅残留后端。
+- 修正：`Product-Spec` 产品摘要、成功标准、SCOPE-001/018、OUT-002/007、FLOW-001 分支、REQ-001 规则与 AC-003——与 SCOPE-019/ASM-004（风控进自动排障）及生产「交互会话计划任务」一致；废止「NSSM 为生产唯一入口」「RISK 只飞书不建任何工单」等过时表述。
+- 说明：代码行为未改；文档对齐基线 `main` @ `35888f6`。SCOPE-020 仍为 P1 待办。Windows 运行机若仍停在 `36ed915` + 本地未提交 diff，属部署漂移，不在本次文档范围。
+
 ## 2026-09-03 · 自动排障闭环生产生效（内部机部署里程碑）
 
 - 部署：SCOPE-019 闭环后端（main `36ed915`）合入内部机 `D:\session-maintenance-system`，`alembic upgrade head` 至 0015，`auto_repair_ticket` / `auto_repair_shop_state` 表结构就绪（数据 0 条为待点火常态，等首个真实 `FAIL` 触发建档）。

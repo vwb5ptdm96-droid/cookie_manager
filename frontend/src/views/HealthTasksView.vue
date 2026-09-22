@@ -3,7 +3,7 @@ import { computed, onMounted, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { EditPen } from "@element-plus/icons-vue";
 import { ArrowDown } from "@element-plus/icons-vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 
 import { fetchProfiles, type ProfileItem } from "@/api/profiles";
 import { fetchScripts, type ScriptItem } from "@/api/scripts";
@@ -23,6 +23,7 @@ import {
 import HealthTaskTimelineDialog from "@/components/HealthTaskTimelineDialog.vue";
 
 const router = useRouter();
+const route = useRoute();
 
 const tasks = ref<HealthTaskItem[]>([]);
 const profiles = ref<ProfileItem[]>([]);
@@ -435,6 +436,12 @@ function handleAction(cmd: string, task: HealthTaskItem): void {
   else if (cmd === "clone") void handleClone(task);
   else if (cmd === "delete") void handleDelete(task);
   else if (cmd === "toggle") void handleToggle(task);
+  else if (cmd === "desk") {
+    router.push({
+      path: "/auto-repair-tickets",
+      query: { shop: task.shop_name || task.health_task_code },
+    });
+  }
 }
 
 function profileDirName(id: number | null): string {
@@ -447,7 +454,11 @@ function scriptName(id: number | null): string {
   return scripts.value.find((s) => s.id === id)?.script_name ?? `#${id}`;
 }
 
-onMounted(loadData);
+onMounted(() => {
+  const keyword = String(route.query.keyword || "").trim();
+  if (keyword) filters.keyword = keyword;
+  void loadData();
+});
 </script>
 
 <template>
@@ -518,6 +529,7 @@ onMounted(loadData);
                   <template #dropdown>
                     <el-dropdown-menu>
                       <el-dropdown-item command="timeline">执行记录</el-dropdown-item>
+                      <el-dropdown-item command="desk">看排障</el-dropdown-item>
                       <el-dropdown-item
                         command="repair"
                         :disabled="!row.enabled || !row.auto_repair_enabled"

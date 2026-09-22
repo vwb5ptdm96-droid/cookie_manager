@@ -188,8 +188,8 @@ class CookieSyncTaskService:
 
     # ── 检测与扩展采集闭环 ──
 
-    def execute_check(self, code: str) -> dict[str, object]:
-        """立即检测：PASS → PASS；FAIL → 反查映射下发采集 → SYNCING / 无映射 FAIL。"""
+    def execute_check(self, code: str, *, follow_up: bool = True) -> dict[str, object]:
+        """立即检测：PASS → PASS；FAIL →（follow_up 时）反查映射下发采集 / 无映射 FAIL。"""
         run_id = f"sync_check_{uuid4().hex[:12]}"
         steps: list[str] = []
         response_preview = ""
@@ -215,6 +215,12 @@ class CookieSyncTaskService:
                 row.last_result_message = check_message
                 row.sync_deadline_at = None
                 session.commit()
+            elif not follow_up:
+                row.status = "FAIL"
+                row.last_run_status = "FAIL"
+                row.last_result_message = check_message
+                session.commit()
+                add_step(f"❌ 检测失败（不跟进补采）: {check_message}")
             else:
                 mapping = self._find_mapping(session, row)
                 if mapping is None:
@@ -226,6 +232,7 @@ class CookieSyncTaskService:
                     add_step("❌ 检测失败且无对应采集映射")
                     add_step("⚠️ 飞书通知运维")
                     self._notify_fail(row, f"{check_message}；无对应采集映射", response_preview)
+                    self._open_collector_ticket(row, "NO_MAPPING", f"{check_message}；无对应采集映射")
                 else:
                     try:
                         task_id = self._dispatch_sync_task(session, row, mapping)
@@ -237,6 +244,7 @@ class CookieSyncTaskService:
                         row.last_result_message = "检测失败，下发采集任务失败"
                         session.commit()
                         self._notify_fail(row, "检测失败，下发采集任务失败", response_preview)
+                        self._open_collector_ticket(row, "DISPATCH_FAILED", "检测失败，下发采集任务失败")
                     else:
                         session.commit()
                         add_step(f"⚠️ 检测失败，已下发采集任务 {task_id} 给 {mapping.worker_id}，进入 SYNCING")
@@ -369,6 +377,7 @@ class CookieSyncTaskService:
             add_step("❌ 复检仍失败")
             add_step("⚠️ 飞书通知运维")
             self._notify_fail(row, f"复检仍失败: {check_message}", response_preview)
+            self._open_collector_ticket(row, "RECHECK_FAIL", f"复检仍失败: {check_message}")
 
         self.log_service.write(
             run_id=run_id,
@@ -403,6 +412,7 @@ class CookieSyncTaskService:
             session.commit()
 
         self._notify_fail(row, "等待扩展上报超时", "")
+        self._open_collector_ticket(row, "JOB_TIMEOUT", "等待扩展上报超时")
         self.log_service.write(
             run_id=run_id,
             run_type="COOKIE_SYNC",
@@ -546,6 +556,36 @@ class CookieSyncTaskService:
             )
         ).scalars().first()
         return fallback
+
+    def lookup_mapping(self, code: str) -> dict[str, object] | None:
+        with self.session_factory() as session:
+            row = self._get_row(session, code)
+            mapping = self._find_mapping(session, row)
+            if mapping is None:
+                return None
+            return {
+                "worker_id": mapping.worker_id,
+                "domain": mapping.domain,
+                "channel": mapping.channel,
+                "shop_name": mapping.shop_name,
+                "dns": mapping.dns,
+            }
+
+    def _open_collector_ticket(self, row: CookieSyncTask, issue_type: str, message: str) -> None:
+        try:
+            from app.services.agent_repair_dispatcher import trigger_cookie_sync_repair
+
+            trigger_cookie_sync_repair(
+                self.engine,
+                channel=row.channel,
+                shop_name=row.shop_name,
+                cookie_sync_task_code=row.cookie_sync_task_code,
+                cookie_sync_task_name=row.cookie_sync_task_name,
+                issue_type=issue_type,
+                error_message=message,
+            )
+        except Exception:
+            logger.exception("[CookieSync] 打开采集工单失败 code=%s", row.cookie_sync_task_code)
 
     def _notify_fail(self, row: CookieSyncTask, message: str, response_preview: str) -> None:
         try:
