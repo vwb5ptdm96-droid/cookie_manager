@@ -136,3 +136,33 @@ def test_loop_stops_on_ticket_conclude():
     )
     assert result["stop"] == "concluded"
     assert result["conclusion"]["status"] == "NEED_HUMAN"
+
+
+def test_loop_serializes_datetime_tool_output():
+    from datetime import datetime
+
+    calls = []
+
+    def complete(*, system, messages, tools):
+        calls.append(messages)
+        if len(calls) == 1:
+            return {
+                "stop_reason": "tool_use",
+                "content": [{"type": "tool_use", "id": "1", "name": "site_env_last_check", "input": {}}],
+            }
+        return {"stop_reason": "end_turn", "content": [{"type": "text", "text": "环境正常"}]}
+
+    def execute(name, args):
+        return {"ok": True, "data": {"items": [{"created_at": datetime(2026, 9, 22, 17, 0, 0)}]}}
+
+    result = run_tool_loop(
+        system="sys",
+        user="环境",
+        tools=tool_specs("watcher"),
+        execute=execute,
+        complete=complete,
+        max_turns=4,
+    )
+    assert result["stop"] == "end_turn"
+    dumped = calls[1][2]["content"][0]["content"]
+    assert "2026-09-22" in dumped

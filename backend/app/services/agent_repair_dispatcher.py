@@ -25,6 +25,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Mapping
 
+from app.core.jsonutil import dumps as json_dumps
 from app.services.auto_repair_ticket_service import AutoRepairTicketService
 from app.services.chrome_utils import kill_chrome_on_port
 from app.services.notification_service import send_feishu_notification
@@ -124,7 +125,7 @@ class AgentRepairDispatcher:
             workdir.mkdir(parents=True, exist_ok=True)
             run_ctx["ticket_dir"] = str(workdir)
             (workdir / "ticket_pack.json").write_text(
-                json.dumps({"ticket": ticket, "run_ctx": {k: run_ctx.get(k) for k in ("script_path", "health_task_code", "cookie_sync_task_code", "profile_key")}}, ensure_ascii=False, indent=2),
+                json_dumps({"ticket": ticket, "run_ctx": {k: run_ctx.get(k) for k in ("script_path", "health_task_code", "cookie_sync_task_code", "profile_key")}}, indent=2),
                 encoding="utf-8",
             )
             pid_path = workdir / "agent.pid"

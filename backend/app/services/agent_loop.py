@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Callable
 from typing import Any
 
 import httpx
 
+from app.core.jsonutil import dumps as json_dumps
 from app.services.agent_repair_dispatcher import DEEPSEEK_ANTHROPIC_BASE_URL, DEEPSEEK_VISION_MODEL
 
 logger = logging.getLogger(__name__)
@@ -104,7 +104,7 @@ def run_tool_loop(
                 {
                     "type": "tool_result",
                     "tool_use_id": use.get("id"),
-                    "content": json.dumps(output, ensure_ascii=False)[:8000],
+                    "content": json_dumps(output)[:8000],
                 }
             )
             if isinstance(output, dict) and output.get("stop_loop"):

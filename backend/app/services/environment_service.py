@@ -59,7 +59,7 @@ class EnvironmentService:
                 "check_code": row.check_code,
                 "status": row.status,
                 "summary": row.summary,
-                "created_at": row.created_at,
+                "created_at": row.created_at.isoformat(timespec="seconds") if row.created_at else None,
             }
 
         return {"items": list(latest_by_code.values())}
