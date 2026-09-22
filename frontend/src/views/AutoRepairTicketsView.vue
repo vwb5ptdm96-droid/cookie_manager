@@ -101,6 +101,12 @@ async function loadList(): Promise<void> {
     tickets.value = data.items;
     status.value = live;
     summary.value = ops;
+    if (current.value && !data.items.some((row) => row.id === current.value?.id)) {
+      current.value = null;
+      events.value = [];
+      chat.value = [];
+      diffText.value = "";
+    }
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : "加载 Agent 工单失败");
   } finally {
@@ -113,6 +119,13 @@ async function openTicket(row: AutoRepairTicketItem): Promise<void> {
   await refreshDetail();
   await nextTick();
   scrollBottom();
+}
+
+function clearTicket(): void {
+  current.value = null;
+  events.value = [];
+  chat.value = [];
+  diffText.value = "";
 }
 
 async function refreshDetail(): Promise<void> {
@@ -159,13 +172,35 @@ async function applyRouteSelection(): Promise<void> {
 async function send(): Promise<void> {
   const text = draft.value.trim();
   if (!text || sending.value) return;
+  const ticketId =
+    current.value && tickets.value.some((row) => row.id === current.value?.id)
+      ? current.value.id
+      : undefined;
+  if (current.value && ticketId == null) {
+    current.value = null;
+    events.value = [];
+    diffText.value = "";
+  }
   sending.value = true;
   draft.value = "";
   chat.value = [...chat.value, { role: "user", text }];
   await nextTick();
   scrollBottom();
   try {
-    const result = await sendAgentChat(text, current.value?.id);
+    let result;
+    try {
+      result = await sendAgentChat(text, ticketId);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "";
+      if (ticketId != null && msg.includes("不存在")) {
+        current.value = null;
+        events.value = [];
+        diffText.value = "";
+        result = await sendAgentChat(text);
+      } else {
+        throw error;
+      }
+    }
     chat.value = result.items;
     await nextTick();
     scrollBottom();
@@ -421,6 +456,7 @@ onUnmounted(stopPoll);
             <h3>{{ current ? current.ticket_code : "值班摘要" }}</h3>
             <p class="hint">{{ progressLabel }}</p>
           </div>
+          <el-button v-if="current" size="small" text @click="clearTicket">退出本单</el-button>
           <el-tag v-if="current" :type="statusType(current.status)" size="small">{{ current.status }}</el-tag>
           <el-tag v-else size="small" type="info">Watcher</el-tag>
         </div>
