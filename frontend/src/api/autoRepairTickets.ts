@@ -147,3 +147,15 @@ export function restartBackend(): Promise<{ scheduled?: boolean; dry_run?: boole
 export function probeBackendHealth(): Promise<{ ok: boolean; status_code?: number }> {
   return apiRequest("/agent/sre/health-probe");
 }
+
+export function deleteAutoRepairTicket(id: number): Promise<{ deleted: AutoRepairTicketItem }> {
+  return apiRequest(`/auto-repair-tickets/${id}`, { method: "DELETE" });
+}
+
+export function purgeClosedTickets(): Promise<{ deleted: number }> {
+  return apiRequest("/auto-repair-tickets/purge-history", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ confirmed: true }),
+  });
+}

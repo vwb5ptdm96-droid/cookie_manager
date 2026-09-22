@@ -12,7 +12,9 @@ AutoRepairShopState 上，与单张工单生命周期无关：上一张工单进
 from __future__ import annotations
 
 import logging
+import shutil
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -20,6 +22,7 @@ from sqlalchemy import Engine, func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.core.errors import AppError
 from app.models.auto_repair_shop_state import AutoRepairShopState
 from app.models.auto_repair_ticket import AutoRepairTicket
 
@@ -72,6 +75,21 @@ def _sanitize(text: str | None) -> str | None:
         return HealthTaskService._mask_sensitive(text)
     except Exception:
         return text
+
+
+def purge_ticket_artifacts(runtime_root: Path, ticket_code: str) -> None:
+    """删工单目录 / 日志 / 对话，不碰 scripts 与 profiles。"""
+    code = (ticket_code or "").strip()
+    if not code or any(ch in code for ch in ("/", "\\", "..")):
+        return
+    root = Path(runtime_root)
+    shutil.rmtree(root / "artifacts" / code, ignore_errors=True)
+    log = root / "logs" / "auto_repair" / f"{code}.log"
+    if log.is_file():
+        log.unlink(missing_ok=True)
+    chat = root / "artifacts" / "_agent_chat" / f"{code}.jsonl"
+    if chat.is_file():
+        chat.unlink(missing_ok=True)
 
 
 class AutoRepairTicketService:
@@ -266,6 +284,29 @@ class AutoRepairTicketService:
         with Session(self.engine) as session:
             row = session.get(AutoRepairTicket, ticket_id)
             return self._serialize(row) if row is not None else None
+
+    def delete_ticket(self, ticket_id: int) -> dict[str, Any]:
+        with Session(self.engine) as session:
+            row = session.get(AutoRepairTicket, ticket_id)
+            if row is None:
+                raise AppError("自动排障工单不存在", "AUTO_REPAIR_TICKET_NOT_FOUND", status_code=404)
+            if row.status == "RUNNING":
+                raise AppError("处理中的工单不能删", "TICKET_DELETE_RUNNING", status_code=409)
+            data = self._serialize(row)
+            session.delete(row)
+            session.commit()
+            return data
+
+    def delete_closed_tickets(self) -> list[dict[str, Any]]:
+        with Session(self.engine) as session:
+            rows = session.execute(
+                select(AutoRepairTicket).where(AutoRepairTicket.status.in_(tuple(TERMINAL_STATUSES)))
+            ).scalars().all()
+            deleted = [self._serialize(row) for row in rows]
+            for row in rows:
+                session.delete(row)
+            session.commit()
+            return deleted
 
     def list_stale_running(self, older_than: datetime) -> list[dict[str, Any]]:
         with Session(self.engine) as session:

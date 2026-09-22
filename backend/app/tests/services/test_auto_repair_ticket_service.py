@@ -167,6 +167,33 @@ def test_record_result_statuses(tmp_path) -> None:
     assert svc.get_ticket(t3["id"])["status"] == "PENDING"
 
 
+def test_delete_ticket_refuses_running_and_purges_closed(tmp_path) -> None:
+    from app.core.errors import AppError
+
+    svc = build_service(tmp_path)
+    closed = svc.create_or_reuse(**base_ctx())
+    svc.record_result(closed["id"], status="FAILED", diagnosis="旧单")
+    pending = svc.create_or_reuse(**base_ctx(shop_name="另一家"))
+    running = svc.create_or_reuse(**base_ctx(shop_name="进行中"))
+    with Session(svc.engine) as session:
+        row = session.get(AutoRepairTicket, running["id"])
+        assert row is not None
+        row.status = "RUNNING"
+        session.commit()
+    try:
+        svc.delete_ticket(running["id"])
+        raise AssertionError("should refuse RUNNING")
+    except AppError as exc:
+        assert exc.error_code == "TICKET_DELETE_RUNNING"
+    deleted = svc.delete_closed_tickets()
+    assert [row["id"] for row in deleted] == [closed["id"]]
+    assert svc.get_ticket(closed["id"]) is None
+    assert svc.get_ticket(pending["id"]) is not None
+    assert svc.get_ticket(running["id"]) is not None
+    svc.delete_ticket(pending["id"])
+    assert svc.get_ticket(pending["id"]) is None
+
+
 def test_record_result_clips_oversized_diagnosis(tmp_path) -> None:
     from app.services.auto_repair_ticket_service import MAX_DIAGNOSIS_CHARS
 

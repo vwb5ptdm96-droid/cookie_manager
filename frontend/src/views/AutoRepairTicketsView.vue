@@ -9,7 +9,9 @@ import {
   fetchAutoRepairTickets,
   fetchOpsSummary,
   fetchSreExplain,
+  deleteAutoRepairTicket,
   probeBackendHealth,
+  purgeClosedTickets,
   recycleStaleRuns,
   restartBackend,
   runSreEnvCheck,
@@ -289,6 +291,58 @@ async function handleRestart(): Promise<void> {
   }
 }
 
+async function handleDeleteCurrent(): Promise<void> {
+  const row = current.value;
+  if (!row) return;
+  if (row.status === "RUNNING") {
+    ElMessage.warning("处理中的工单不能删");
+    return;
+  }
+  try {
+    await ElMessageBox.confirm(
+      `删除工单 ${row.ticket_code}（${row.shop_name || row.channel}），并清掉本单目录/日志。RUNNING 不能删。`,
+      "确认删除工单",
+      { type: "warning", confirmButtonText: "删除", cancelButtonText: "取消" },
+    );
+  } catch {
+    return;
+  }
+  try {
+    await deleteAutoRepairTicket(row.id);
+    current.value = null;
+    events.value = [];
+    chat.value = [];
+    ElMessage.success("已删除");
+    await loadList();
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "删除失败");
+  }
+}
+
+async function handlePurgeHistory(): Promise<void> {
+  try {
+    await ElMessageBox.confirm(
+      "删除所有已关闭工单（SOLVED / NEED_HUMAN / FAILED），并清本单产物。PENDING/RUNNING 保留。",
+      "清理历史工单",
+      { type: "warning", confirmButtonText: "确认清理", cancelButtonText: "取消" },
+    );
+  } catch {
+    return;
+  }
+  try {
+    const out = await purgeClosedTickets();
+    if (current.value && ["SOLVED", "NEED_HUMAN", "FAILED"].includes(current.value.status)) {
+      current.value = null;
+      events.value = [];
+      chat.value = [];
+    }
+    ElMessage.success(`已清理 ${out.deleted} 张`);
+    await loadList();
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "清理失败");
+  }
+}
+
 onMounted(() => {
   void loadList().then(() => applyRouteSelection());
   startPoll();
@@ -325,6 +379,7 @@ onUnmounted(stopPoll);
         </p>
       </div>
       <el-button size="small" @click="loadList">刷新</el-button>
+      <el-button size="small" type="danger" plain @click="handlePurgeHistory">清理历史</el-button>
     </header>
 
     <div class="agent-grid">
@@ -418,6 +473,13 @@ onUnmounted(stopPoll);
             <div v-if="current.usage.model">{{ current.usage.model }}</div>
           </div>
           <pre v-if="diffText" class="diff">{{ diffText }}</pre>
+          <el-button
+            size="small"
+            type="danger"
+            plain
+            :disabled="current.status === 'RUNNING'"
+            @click="handleDeleteCurrent"
+          >删除本单</el-button>
         </template>
         <div class="sre-gate">
           <strong>SRE 闸</strong>
